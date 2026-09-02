@@ -23,7 +23,7 @@ from send_email import send_email
 
 def main():
     test_options = {
-        'email': 'daiviet.huynh@gmail.com',
+        'email': 'daiviet@vestracapital.com.au',
         'subject': 'Automated Email System Test',
         'message': '<p>This is a <strong>test automated email, from the email automation system</strong> from the Vestra Capital email utility.</p>',
     }

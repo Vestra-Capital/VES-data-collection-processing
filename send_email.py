@@ -40,7 +40,7 @@ EMAIL_FOOTER = """
     </span>
     <hr>
     <span style="font-size: 0.6em;">
-      General info only, not personal advice. Consider your aims and finances before acting. Review full terms and seek independent advice — <a href="https://www.vestracapital.com.au/privacy-policy">Privacy Policy</a>&nbsp;| &nbsp;<a href="https://www.vestracapital.com.au/terms-of-service">Terms of Use</a>
+      General info only, not personal advice. Consider your aims and finances before acting. Review full terms and seek independent advice — <a href="https://www.vestracapital.com.au/">Privacy Policy</a>&nbsp;| &nbsp;<a href="https://www.vestracapital.com.au/">Terms of Use</a>
     </span>
   </span>
 """
