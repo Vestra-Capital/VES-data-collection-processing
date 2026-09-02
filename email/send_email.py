@@ -3,6 +3,19 @@ Email sending utility for Vestra Capital communications.
 
 Uses the Brevo (formerly Sendinblue) transactional email API to send
 HTML emails with a branded header and footer.
+
+Environment variables required:
+    BREVO_API_KEY: API key for Brevo authentication.
+    BREVO_EMAIL_SENDER: Verified sender email address.
+
+Typical usage::
+
+    from email.send_email import send_email
+    send_email({
+        'email': 'client@example.com',
+        'subject': 'Your Portfolio Update',
+        'message': '<p>Portfolio content here...</p>',
+    })
 """
 
 import logging
@@ -14,6 +27,8 @@ from dotenv import load_dotenv
 
 # Load environment variables from the project .env file so the module
 # can be used directly without requiring the caller to export variables.
+# We resolve the path relative to this file so it works regardless of
+# the process's current working directory.
 load_dotenv(Path(__file__).resolve().parent / '.env')
 
 # Module-level logger for email sending operations.
@@ -47,8 +62,10 @@ EMAIL_FOOTER = """
 
 
 def send_email(options):
-    """
-    Send a transactional email via the Brevo API.
+    """Send a transactional email via the Brevo API.
+
+    Wraps the caller's HTML message with the standardised Vestra Capital
+    branded header and footer before submitting to Brevo.
 
     Args:
         options (dict): Email payload containing the following keys:

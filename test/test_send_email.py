@@ -3,25 +3,33 @@ Test script to send a sample email via the Brevo API.
 
 This script is intended for manual validation of the send_email utility.
 It will send a branded test message to a fixed recipient address.
+
+Prerequisites:
+    - ``BREVO_API_KEY`` and ``BREVO_EMAIL_SENDER`` must be set in ``.env``.
+    - The recipient address should be changed to a real mailbox before
+      executing this script outside of a controlled test environment.
 """
 
 import logging
 import sys
 import os
 
-# Configure logging before importing project modules.
+# Configure logging before importing project modules so that all log
+# output uses the same format and level from the start.
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 
-# Ensure the project root is on the path so send_email.py can be imported.
+# Ensure the project root is on the path so send_email.py can be imported
+# regardless of the working directory from which this script is invoked.
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from send_email import send_email
+from email.send_email import send_email
 
 
 def main():
+    """Send a single test email to verify the Brevo integration."""
     test_options = {
         'email': 'daiviet@vestracapital.com.au',
         'subject': 'Automated Email System Test',
