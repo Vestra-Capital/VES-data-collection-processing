@@ -297,12 +297,19 @@ def _enrich_client_document(doc: Dict[str, Any]) -> Dict[str, Any]:
     return enriched
 
 
+_PROTECTED_CLIENT_FIELDS = ("first_name", "last_name", "email", "telephone", "client_category")
+
+
 def upsert_clients(documents: List[Dict[str, Any]]) -> None:
     """Upsert trading account documents into the ``clients`` collection.
 
     Each document is matched by ``accountNumber`` when present.  Documents
     without ``accountNumber`` are inserted as-is.  Every document is
     enriched with derived client fields before being written.
+
+    For existing documents, protected client fields (``first_name``,
+    ``last_name``, ``email``, ``telephone``, and ``client_category``) are
+    preserved from the database and not overwritten by the API payload.
 
     Args:
         documents: List of trading account dicts to upsert.
@@ -329,6 +336,11 @@ def upsert_clients(documents: List[Dict[str, Any]]) -> None:
                 filter_query["accountNumber"] = account_number
 
             if filter_query:
+                existing = collection.find_one(filter_query)
+                if existing:
+                    for field in _PROTECTED_CLIENT_FIELDS:
+                        if field in existing:
+                            enriched_doc[field] = existing[field]
                 collection.replace_one(filter_query, enriched_doc, upsert=True)
             else:
                 collection.insert_one(enriched_doc)
