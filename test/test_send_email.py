@@ -30,13 +30,19 @@ from email.send_email import send_email
 
 def main():
     """Send a single test email to verify the Brevo integration."""
+    # TODO: Replace with a real test recipient before running outside
+    # of a controlled environment.
     test_options = {
         'email': 'daiviet@vestracapital.com.au',
         'subject': 'Automated Email System Test',
         'message': '<p>This is a <strong>test automated email, from the email automation system</strong> from the Vestra Capital email utility.</p>',
     }
 
-    send_email(test_options)
+    response = send_email(test_options)
+    # The Brevo API returns a JSON body containing at least ``messageId``.
+    # In a production test harness, assert on ``response['messageId']`` to
+    # confirm delivery acceptance.
+    print(f"Brevo response: {response}")
 
 
 if __name__ == '__main__':

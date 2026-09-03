@@ -1,7 +1,7 @@
 """Script to send an email containing an HTML table of prospects with status "Pending".
 
 Queries the MongoDB ``prospects`` collection for documents whose ``status``
-field equals ``"pending"`` (case-insensitive) and sends a branded email
+field equals ``"Pending"`` (case-insensitive) and sends a branded email
 containing an HTML table of matching prospects.
 
 The email table includes the following columns:
@@ -31,8 +31,14 @@ from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 
 project_root = Path(__file__).resolve().parent.parent
+
+# Load environment variables from the project root ``.env`` file.
 load_dotenv(project_root / ".env")
 
+# ``send_email`` lives in the ``email`` package at the project root.  We load
+# it dynamically here because this script is invoked directly (not as part of
+# the ``email`` package) and a standard absolute import would require
+# manipulating ``sys.path`` in a less explicit way.
 send_email_module_path = project_root / "email" / "send_email.py"
 _spec = importlib.util.spec_from_file_location("send_email", send_email_module_path)
 _send_email_module = importlib.util.module_from_spec(_spec)
@@ -45,15 +51,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-load_dotenv(project_root / ".env")
-
 DATABASE_NAME = os.getenv("DATABASE_NAME", "VESTRA_PROD")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "prospects")
 PENDING_STATUS = "Pending"
-NOTIFICATION_EMAIL = "daiviet@vestracapital.com.au"
+# Recipient for the pending-prospects report.  Falls back to the verified
+# Brevo sender address when ``NOTIFICATION_EMAIL`` is not explicitly set.
+NOTIFICATION_EMAIL = os.getenv("NOTIFICATION_EMAIL") or os.getenv("BREVO_EMAIL_SENDER")
 
 
 def get_mongo_client() -> MongoClient:
+    """Create and return a MongoDB client from environment configuration.
+
+    Returns:
+        A ``MongoClient`` instance connected to the cluster specified by
+        ``MONGODB_SRV`` in ``.env``.
+
+    Raises:
+        RuntimeError: If ``MONGODB_SRV`` is not configured.
+    """
     mongo_srv = os.getenv("MONGODB_SRV")
     if not mongo_srv:
         raise RuntimeError("MONGODB_SRV is missing. Check your .env file.")
@@ -61,6 +76,17 @@ def get_mongo_client() -> MongoClient:
 
 
 def fetch_pending_prospects() -> list[dict]:
+    """Query the MongoDB ``prospects`` collection for documents with status ``Pending``.
+
+    Performs a case-insensitive regex match on the ``status`` field and
+    returns all matching prospect documents as a list of dictionaries.
+
+    Returns:
+        List of prospect document dicts whose ``status`` matches ``Pending``.
+
+    Raises:
+        RuntimeError: If the MongoDB connection or query operation fails.
+    """
     client = get_mongo_client()
     try:
         db = client[DATABASE_NAME]
@@ -74,6 +100,19 @@ def fetch_pending_prospects() -> list[dict]:
 
 
 def build_html_table(prospects: list[dict]) -> str:
+    """Build an HTML table string from a list of prospect documents.
+
+    The table includes the following columns:
+    ``first_name``, ``last_name``, ``email``, ``telephone``, and
+    ``preferredTopic``.  If the prospect list is empty, a placeholder
+    message is returned instead of an empty table.
+
+    Args:
+        prospects: List of prospect dicts to render.
+
+    Returns:
+        HTML string representing the prospects table or an empty-state message.
+    """
     if not prospects:
         return "<p>No prospects with status <strong>Pending</strong> were found.</p>"
 
@@ -108,6 +147,15 @@ def build_html_table(prospects: list[dict]) -> str:
 
 
 def build_email_body(table_html: str, count: int) -> str:
+    """Compose the HTML email body wrapping the prospects table.
+
+    Args:
+        table_html: HTML table string produced by :func:`build_html_table`.
+        count: Number of pending prospects being reported.
+
+    Returns:
+        HTML string containing a summary paragraph and the prospects table.
+    """
     return (
         f"<p>There are currently <strong>{count}</strong> prospect(s) with status "
         f"<strong>Pending</strong>:</p>"
@@ -116,6 +164,22 @@ def build_email_body(table_html: str, count: int) -> str:
 
 
 def send_pending_prospects_email(recipient: str | None = None) -> None:
+    """Fetch pending prospects and send a branded HTML report email.
+
+    Queries the ``prospects`` collection for documents whose ``status``
+    field equals ``"Pending"`` (case-insensitive), builds an HTML table
+    of the matching records, and sends the report to the specified
+    recipient via :func:`email.send_email.send_email`.
+
+    Args:
+        recipient: Optional override for the report recipient.  When
+            ``None``, the address is resolved from ``NOTIFICATION_EMAIL``
+            or ``BREVO_EMAIL_SENDER`` in the environment.
+
+    Raises:
+        RuntimeError: If no recipient can be determined or if the email
+            send operation fails.
+    """
     recipient = recipient or NOTIFICATION_EMAIL
     if not recipient:
         raise RuntimeError(

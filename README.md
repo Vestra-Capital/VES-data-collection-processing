@@ -35,6 +35,7 @@ This repository implements the **Vestra Capital Data Collection & Processing** p
   - `telephone` — sourced from `mobilePhone`, `workPhone`, or `homePhone`
   - `client_category` — always set to `"Wealth Management"`
 - **Upserting** enriched documents into the MongoDB `clients` collection, keyed by `accountNumber`.
+- **Fetching** account equity holdings via the Morrison Securities Equity Holdings API (`/equityholdings/v1`) without zero holdings and persisting them into MongoDB `portfolios`.
 - **Sending** branded transactional emails via the Brevo SMTP transactional API.
 - **Reporting** pending prospects by querying the MongoDB `prospects` collection and sending a branded HTML table email.
 
@@ -63,19 +64,23 @@ graph LR
 ```mermaid
 graph TB
     subgraph "Python Pipeline"
-        CLI["CLI Entry Point<br/>python data/get_trading_account.py"]
+        CLI["CLI Entry Point<br/>python data/001_get_trading_account.py"]
         CONFIG["configuration.py<br/>fetch_data()"]
-        FETCHER["get_trading_account.py<br/>fetch_trading_accounts()"]
+        FETCHER["001_get_trading_account.py<br/>fetch_trading_accounts()"]
         ENRICH["Enrichment Layer<br/>_enrich_client_document()"]
         PERSIST["Persistence Layer<br/>upsert_clients()"]
         EMAIL["email/send_email.py<br/>send_email()"]
         PROSPECTS["scripts/send_pending_prospects_email.py<br/>send_pending_prospects_email()"]
+        HOLDINGS["002_get_portfolio_holdings.py<br/>fetch_account_equity_holdings()"]
+        HOLDINGS_PERSIST["Persistence Layer<br/>upsert_portfolios()"]
     end
 
     subgraph "External Services"
         MORRISON_CONFIG["Morrison Securities<br/>Data Access API"]
         MORRISON_TRADE["Morrison Securities<br/>Trading Accounts API"]
+        MORRISON_HOLDINGS["Morrison Securities<br/>Equity Holdings API"]
         MONGO[(MongoDB Atlas<br/>VESTRA_PROD.clients)]
+        PORTFOLIO_MONGO[(MongoDB Atlas<br/>VESTRA_PROD.portfolios)]
         PROSPECTS_MONGO[(MongoDB Atlas<br/>VESTRA_PROD.prospects)]
         BREVO["Brevo<br/>Transactional Email"]
     end
@@ -94,19 +99,26 @@ graph TB
     PROSPECTS --> PROSPECTS_MONGO
     PROSPECTS --> EMAIL
     EMAIL --> BREVO
+    HOLDINGS --> MONGO
+    HOLDINGS --> HOLDINGS_PERSIST
+    HOLDINGS_PERSIST --> PORTFOLIO_MONGO
 ```
 
 ### Module Dependency Graph
 
 ```mermaid
 graph TD
-    MAIN["get_trading_account.py<br/>(__main__)"] --> CONFIG["configuration.py"]
+    MAIN["001_get_trading_account.py<br/>(__main__)"] --> CONFIG["configuration.py"]
     MAIN --> ENRICH["Enrichment Helpers<br/>(internal)"]
     MAIN --> MONGO["MongoDB Client<br/>(internal)"]
+    HOLDINGS["002_get_portfolio_holdings.py<br/>(__main__)"] --> CONFIG
+    HOLDINGS --> MONGO
     EMAIL["email/send_email.py"] --> DOTENV["python-dotenv"]
     CONFIG --> DOTENV
     MAIN --> DOTENV
+    HOLDINGS --> DOTENV
     MAIN --> PYTHON_MONGO["pymongo"]
+    HOLDINGS --> PYTHON_MONGO
     EMAIL --> REQUESTS["requests"]
     PROSPECTS["scripts/send_pending_prospects_email.py"] --> DOTENV
     PROSPECTS --> PYTHON_MONGO
@@ -121,7 +133,7 @@ graph TD
 
 ```mermaid
 sequenceDiagram
-    participant CLI as get_trading_account.py
+    participant CLI as 001_get_trading_account.py
     participant Config as configuration.py
     participant Morrison as Morrison Securities API
     participant Enrich as Enrichment Layer
@@ -133,12 +145,10 @@ sequenceDiagram
     Config-->>CLI: scope items
 
     loop For each adviser scope
-        loop For includeInactive in [True, False]
-            CLI->>Morrison: GET /tradingaccounts/v2?...&includeInactive=...
-            Morrison-->>CLI: trading accounts JSON
-            CLI->>Enrich: _enrich_client_document(account)
-            Enrich-->>CLI: enriched document
-        end
+        CLI->>Morrison: GET /tradingaccounts/v2?...&includeInactive=false
+        Morrison-->>CLI: trading accounts JSON
+        CLI->>Enrich: _enrich_client_document(account)
+        Enrich-->>CLI: enriched document
     end
 
     CLI->>Mongo: replace_one(filter, enriched_doc, upsert=True)
@@ -202,7 +212,7 @@ sequenceDiagram
 
 ---
 
-### `data/get_trading_account.py`
+### `data/001_get_trading_account.py`
 
 **Purpose:** Fetch trading accounts for each adviser scope, enrich records, and upsert into MongoDB.
 
@@ -235,6 +245,32 @@ graph TD
 - Documents with `accountNumber` are matched via `replace_one(filter={"accountNumber": ...}, upsert=True)`.
 - Documents without `accountNumber` are inserted via `insert_one()`.
 - The original document is not mutated; `_enrich_client_document()` returns a copy.
+
+---
+
+### `data/002_get_portfolio_holdings.py`
+
+**Purpose:** Fetch account equity holdings from the Morrison Securities Equity Holdings API (`/equityholdings/v1`) with `includeZeroHoldings=false`, normalise documents (add `marketCode_yf`, title-case `securityDescription`), and upsert into MongoDB `portfolios` collection. Inactive accounts and accounts with empty holdings are removed from the collection after each upsert.
+
+**Key exports:**
+
+| Symbol | Type | Description |
+|--------|------|-------------|
+| `fetch_account_equity_holdings(scope_item)` | `function` | GET `/equityholdings/v1` with scoping parameters. Returns parsed JSON. |
+| `upsert_portfolios(documents, active_account_numbers)` | `function` | Upsert portfolio documents into `VESTRA_PROD.portfolios` and remove inactive/empty accounts. |
+| `_normalize_holding_document(doc)` | `function` | Return a copy of a holding document with derived fields (`marketCode_yf`, title-cased `securityDescription`). |
+| `_normalize_holdings_documents(data)` | `function` | Unwrap API response envelope into a flat list of holding dicts. |
+
+**Normalisation logic:**
+
+- ``marketCode_yf`` is mapped from ``marketCode`` using a known exchange mapping (e.g. ``ASX`` → ``AX``).
+- ``securityDescription`` is reformatted from ALL-CAPS to title case.
+
+**Upsert strategy:**
+
+- Each document represents one account and is matched by ``accountNumber`` via ``replace_one(filter={"accountNumber": ...}, upsert=True)``.
+- Documents without ``accountNumber`` are inserted via ``insert_one()``.
+- After upserting, any documents whose ``accountNumber`` is not present in the current active batch are removed, purging inactive accounts and accounts with empty holdings from the collection.
 
 ---
 
@@ -407,15 +443,13 @@ COLLECTION_NAME=prospects
 This is the primary pipeline. It discovers adviser scopes, fetches trading accounts for each, enriches them, and upserts into MongoDB.
 
 ```bash
-python data/get_trading_account.py
+python data/001_get_trading_account.py
 ```
 
 **What happens:**
 
 1. `fetch_data()` calls `GET /dataaccess/v1` to retrieve adviser/branch/organisation scope items.
-2. For each unique `adviserCode`, the script makes two API calls to `/tradingaccounts/v2`:
-   - `includeInactive=true`
-   - `includeInactive=false`
+2. For each unique `adviserCode`, the script makes one API call to `/tradingaccounts/v2` with `includeInactive=false` to fetch active accounts only.
 3. Each response is normalized via `_normalize_to_documents()`, which unwraps the `Data` envelope.
 4. Each account document is enriched via `_enrich_client_document()`.
 5. Documents are upserted into `VESTRA_PROD.clients` by `accountNumber`.
@@ -423,9 +457,9 @@ python data/get_trading_account.py
 **Sample output:**
 
 ```
-Requesting: https://api.morrison.fortrez.com.au/tradingaccounts/v2?organisationCode=TPSSCS&branchCode=SO&adviserCode=VO2&includeInactive=true
+Requesting: https://api.morrison.fortrez.com.au/tradingaccounts/v2?organisationCode=TPSSCS&branchCode=SO&adviserCode=VO2&includeInactive=false
 
---- Result for adviserCode=VO2 includeInactive=True ---
+--- Result for adviserCode=VO2 includeInactive=False ---
 {
   "RequestID": "...",
   "Type": "TradingAccountsV2Response",
@@ -447,7 +481,39 @@ python scripts/send_pending_prospects_email.py
 2. Builds an HTML table containing `first_name`, `last_name`, `email`, `telephone`, and `preferredTopic`.
 3. Sends a branded email to the address configured in `NOTIFICATION_EMAIL` (or the `recipient` argument if provided).
 
-### 3. Send a Test Email
+### 3. Fetch and Upsert Portfolio Holdings
+
+```bash
+python data/002_get_portfolio_holdings.py
+```
+
+**What happens:**
+
+1. Reads the `clients` collection from MongoDB to get active account numbers.
+2. For each account, calls `GET /equityholdings/v1` with `includeZeroHoldings=false`.
+3. Each response is normalized via `_normalize_holdings_documents()`, which unwraps the response envelope.
+4. Each holding document is normalized via `_normalize_holding_document()`.
+5. Documents are grouped by `accountNumber` and upserted into `VESTRA_PROD.portfolios`.
+6. Accounts with empty holdings or accounts no longer present in the `clients` collection are removed from `portfolios`.
+
+**Sample output:**
+
+```
+Requesting: https://api.morrison.fortrez.com.au/equityholdings/v1?organisationCode=TPSSCS&branchCode=SO&adviserCode=VO2&accountNumber=12345&includeZeroHoldings=false
+
+--- Result for adviserCode=VO2 accountNumber=12345 includeZeroHoldings=False ---
+{
+  "RequestID": "...",
+  "Type": "EquityHoldingsV1Response",
+  "Success": true,
+  "Data": [ ... ]
+}
+
+Upserted 1 document(s) into 'VESTRA_PROD.portfolios'.
+Removed 0 inactive/empty portfolio document(s).
+```
+
+### 4. Send a Test Email
 
 ```bash
 python test/test_send_email.py
@@ -458,6 +524,8 @@ python test/test_send_email.py
 2. Calls `send_email()` from `email/send_email.py`.
 3. The message is wrapped with the Vestra Capital branded header and footer.
 4. The email is submitted to Brevo's SMTP transactional endpoint.
+
+---
 
 ---
 
@@ -531,7 +599,8 @@ The pipeline uses explicit error handling with rich diagnostic context:
 | Test | Command | Expected Outcome |
 |------|---------|------------------|
 | Fetch data access scope | `python -c "from data.configuration import fetch_data; print(fetch_data())"` | JSON with adviser/branch scope |
-| Fetch trading accounts | `python data/get_trading_account.py` | Console output with account JSON and upsert count |
+| Fetch trading accounts | `python data/001_get_trading_account.py` | Console output with account JSON and upsert count |
+| Fetch portfolio holdings | `python data/002_get_portfolio_holdings.py` | Console output with holdings JSON and upsert count |
 | Send pending prospects report | `python scripts/send_pending_prospects_email.py` | Email delivered with HTML table of pending prospects |
 | Send test email | `python test/test_send_email.py` | Email delivered to test recipient |
 
@@ -565,7 +634,10 @@ To run the pipeline on a schedule:
 
 ```bash
 # Example crontab entry: run daily at 2 AM
-0 2 * * * /path/to/venv/bin/python /path/to/VES-data-collection-processing/data/get_trading_account.py >> /var/log/ves-pipeline.log 2>&1
+0 2 * * * /path/to/venv/bin/python /path/to/VES-data-collection-processing/data/001_get_trading_account.py >> /var/log/ves-pipeline.log 2>&1
+
+# Example crontab entry: run daily at 3 AM
+0 3 * * * /path/to/venv/bin/python /path/to/VES-data-collection-processing/data/002_get_portfolio_holdings.py >> /var/log/ves-portfolios.log 2>&1
 
 # Example crontab entry: send pending prospects report daily at 8 AM
 0 8 * * * /path/to/venv/bin/python /path/to/VES-data-collection-processing/scripts/send_pending_prospects_email.py >> /var/log/ves-prospects.log 2>&1

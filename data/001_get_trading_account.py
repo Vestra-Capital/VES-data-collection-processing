@@ -11,7 +11,7 @@ client fields, and upserts them into the MongoDB ``clients`` collection.
 
 Typical usage::
 
-    from data.get_trading_account import fetch_trading_accounts, upsert_clients
+    from data.001_get_trading_account import fetch_trading_accounts, upsert_clients
 
     scope = {
         "organisationCode": "TPSSCS",
@@ -24,6 +24,7 @@ Typical usage::
 """
 
 import json
+import logging
 import os
 from typing import Any, Dict, List
 from urllib.error import HTTPError
@@ -48,6 +49,9 @@ ENDPOINT_PATH: str = "/tradingaccounts/v2"
 
 # Full request URL composed from shared base host and endpoint path.
 API_URL: str = BASE_URL + ENDPOINT_PATH
+
+# Module-level logger for trading account pipeline operations.
+logger = logging.getLogger(__name__)
 
 
 def _build_url(scope_item: Dict[str, Any]) -> str:
@@ -101,7 +105,7 @@ def fetch_trading_accounts(scope_item: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("MORRISON_ACCESS_KEY is missing. Check your .env file.")
 
     url = _build_url(scope_item)
-    print(f"Requesting: {url}")
+    logger.info("Requesting: %s", url)
 
     request = Request(url, headers=HEADERS, method="GET")
 
@@ -311,6 +315,10 @@ def upsert_clients(documents: List[Dict[str, Any]]) -> None:
     ``last_name``, ``email``, ``telephone``, and ``client_category``) are
     preserved from the database and not overwritten by the API payload.
 
+    After upserting, any documents in the collection whose ``accountNumber``
+    is not present in the current active batch are removed, ensuring that
+    inactive accounts are purged from the local store.
+
     Args:
         documents: List of trading account dicts to upsert.
 
@@ -318,7 +326,7 @@ def upsert_clients(documents: List[Dict[str, Any]]) -> None:
         RuntimeError: If the MongoDB connection or upsert operation fails.
     """
     if not documents:
-        print("No documents to upsert.")
+        logger.info("No documents to upsert.")
         return
 
     db_name = os.getenv("DATABASE_NAME", "VESTRA_PROD")
@@ -327,13 +335,21 @@ def upsert_clients(documents: List[Dict[str, Any]]) -> None:
         db = client[db_name]
         collection = db["clients"]
 
+        # Ensure an index on ``accountNumber`` so that upserts and the
+        # cleanup delete below can use an efficient query plan.
+        collection.create_index("accountNumber", background=True)
+
         upserted = 0
-        for doc in documents:
+        active_account_numbers: set = set()
+        total = len(documents)
+        logger.info("Starting upsert of %d document(s) into '%s.clients'.", total, db_name)
+        for idx, doc in enumerate(documents, start=1):
             enriched_doc = _enrich_client_document(doc)
             filter_query: Dict[str, Any] = {}
             account_number = enriched_doc.get("accountNumber")
             if account_number:
                 filter_query["accountNumber"] = account_number
+                active_account_numbers.add(account_number)
 
             if filter_query:
                 existing = collection.find_one(filter_query)
@@ -346,7 +362,28 @@ def upsert_clients(documents: List[Dict[str, Any]]) -> None:
                 collection.insert_one(enriched_doc)
             upserted += 1
 
-        print(f"Upserted {upserted} document(s) into '{db_name}.clients'.")
+            if idx % 50 == 0 or idx == total:
+                logger.info("Upsert progress: %d/%d document(s) processed.", idx, total)
+
+        # Remove documents whose ``accountNumber`` is not present in the
+        # current active batch.  This purges accounts that are no longer
+        # returned by the Morrison API (i.e. inactive accounts).
+        if active_account_numbers:
+            logger.info("Removing inactive document(s) from '%s.clients'...", db_name)
+            delete_filter = {
+                "accountNumber": {
+                    "$nin": list(active_account_numbers),
+                    "$exists": True,
+                    "$ne": None,
+                }
+            }
+            delete_result = collection.delete_many(delete_filter)
+            if delete_result.deleted_count:
+                logger.info("Removed %d inactive document(s) from '%s.clients'.", delete_result.deleted_count, db_name)
+            else:
+                logger.info("No inactive document(s) to remove from '%s.clients'.", db_name)
+
+        logger.info("Upserted %d document(s) into '%s.clients'.", upserted, db_name)
     except PyMongoError as e:
         raise RuntimeError(f"Failed to upsert documents into MongoDB: {e}") from e
     finally:
@@ -355,6 +392,11 @@ def upsert_clients(documents: List[Dict[str, Any]]) -> None:
 
 if __name__ == "__main__":
     import json as _json
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
 
     config = fetch_data()
     scope_items = _extract_scope_items(config)
@@ -365,23 +407,32 @@ if __name__ == "__main__":
     for item in scope_items:
         adviser_code = item.get("adviserCode")
         if adviser_code in seen_adviser_codes:
+            logger.info("Skipping already-seen adviserCode=%s", adviser_code)
             continue
         if adviser_code:
             seen_adviser_codes.add(adviser_code)
 
-        for include_inactive in (True, False):
+        for include_inactive in (False,):
             call_item = dict(item)
             call_item["includeInactive"] = include_inactive
 
             data = fetch_trading_accounts(call_item)
-            print(f"\n--- Result for adviserCode={adviser_code or 'N/A'} includeInactive={include_inactive} ---")
-            print(_json.dumps(data, indent=2, ensure_ascii=False))
+            logger.info(
+                "Result for adviserCode=%s includeInactive=%s",
+                adviser_code or "N/A",
+                include_inactive,
+            )
+            logger.debug("%s", _json.dumps(data, indent=2, ensure_ascii=False))
 
             documents = _normalize_to_documents(data)
             if documents:
                 all_documents.extend(documents)
+                logger.info("Collected %d document(s) for adviserCode=%s.", len(documents), adviser_code or "N/A")
+            else:
+                logger.info("No documents returned for adviserCode=%s.", adviser_code or "N/A")
 
     if all_documents:
+        logger.info("Total documents collected: %d. Proceeding to upsert.", len(all_documents))
         upsert_clients(all_documents)
     else:
-        print("No trading account documents collected; skipping database upsert.")
+        logger.info("No trading account documents collected; skipping database upsert.")
