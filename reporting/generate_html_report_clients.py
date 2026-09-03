@@ -24,6 +24,8 @@ import html
 import json
 import logging
 import os
+import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -419,6 +421,15 @@ def generate_client_report(output_path: str | None = None) -> str:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html_content, encoding="utf-8")
     logger.info("HTML report written to %s", out.resolve())
+
+    try:
+        subprocess.run(["open", str(out)], check=False)
+        time.sleep(3)
+        out.unlink()
+        logger.info("Deleted temporary HTML report %s", out.resolve())
+    except OSError as exc:
+        logger.warning("Failed to open or delete HTML report: %s", exc)
+
     return str(out.resolve())
 
 
