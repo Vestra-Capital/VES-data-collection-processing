@@ -199,6 +199,21 @@ def _normalize_to_documents(data: Any) -> List[Dict[str, Any]]:
     return []
 
 
+def _normalize_account_name(name: str) -> str:
+    """Collapse multiple spaces in an account name into single spaces.
+
+    Args:
+        name: Raw account name string from the Morrison API.
+
+    Returns:
+        Normalized account name with single spaces between words, or an
+        empty string if the input is not a string.
+    """
+    if not isinstance(name, str):
+        return ""
+    return " ".join(name.split())
+
+
 def _extract_first_last_name(account_name: str) -> tuple:
     """Extract first and last name from an ``accountName`` string.
 
@@ -291,7 +306,8 @@ def _enrich_client_document(doc: Dict[str, Any]) -> Dict[str, Any]:
         New dict containing both original fields and derived client fields.
     """
     enriched = dict(doc)
-    account_name = enriched.get("accountName", "")
+    account_name = _normalize_account_name(enriched.get("accountName", ""))
+    enriched["accountName"] = account_name
     first_name, last_name = _extract_first_last_name(account_name)
     enriched["first_name"] = first_name
     enriched["last_name"] = last_name

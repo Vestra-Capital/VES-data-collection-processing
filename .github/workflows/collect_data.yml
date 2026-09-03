@@ -1,0 +1,22 @@
+name: Collect Data
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  collect-data:
+    runs-on: ubuntu-latest
+    env:
+      MONGODB_SRV: ${{ secrets.MONGODB_SRV }}
+      DATABASE_NAME: ${{ secrets.DATABASE_NAME }}
+      MORRISON_ACCESS_KEY: ${{ secrets.MORRISON_ACCESS_KEY }}
+      MORRISON_API_BASE_URL: ${{ secrets.MORRISON_API_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python batch/collect_data.py
