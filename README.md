@@ -27,7 +27,7 @@ A production-grade Python pipeline that retrieves trading account data from the 
 This repository implements the **Vestra Capital Data Collection & Processing** pipeline. It is responsible for:
 
 - **Discovering** adviser and branch scope from the Morrison Securities Data Access API (`/dataaccess/v1`).
-- **Fetching** trading accounts for each adviser scope via the Morrison Securities Trading Accounts API (`/tradingaccounts/v2`), for both active and inactive records.
+- **Fetching** trading accounts for each adviser scope via the Morrison Securities Trading Accounts API (`/tradingaccounts/v2`) with `includeInactive=false`, fetching active accounts only.
 - **Enriching** each raw trading account document with derived client fields:
   - `first_name` — parsed from `accountName`
   - `last_name` — parsed from `accountName`
@@ -168,6 +168,46 @@ graph LR
     D --> F
     E --> F
     F --> G[(MongoDB clients collection)]
+```
+
+### Portfolio Holdings Pipeline
+
+```mermaid
+sequenceDiagram
+    participant CLI as 002_get_portfolio_holdings.py
+    participant MongoClients as MongoDB clients
+    participant Morrison as Morrison Securities API
+    participant Normalize as Normalization Layer
+    participant MongoPortfolios as MongoDB portfolios
+
+    CLI->>MongoClients: find({}, {"_id": 0})
+    MongoClients-->>CLI: client documents
+
+    loop For each accountNumber
+        CLI->>Morrison: GET /equityholdings/v1?...&includeZeroHoldings=false
+        Morrison-->>CLI: equity holdings JSON
+        CLI->>Normalize: _normalize_holdings_documents(data)
+        Normalize-->>CLI: holdings list
+        CLI->>Normalize: _normalize_holding_document(holding)
+        Normalize-->>CLI: normalized holding
+    end
+
+    CLI->>MongoPortfolios: replace_one(filter, doc, upsert=True)
+    MongoPortfolios-->>CLI: OK
+
+    CLI->>MongoPortfolios: delete_many({accountNumber: {$nin: active}})
+    MongoPortfolios-->>CLI: deleted count
+```
+
+### Holdings Normalisation Transform
+
+```mermaid
+graph LR
+    A[Raw Holding] --> B{Map marketCode<br/>e.g. ASX → AX}
+    A --> C[Title-case securityDescription]
+    B --> D[Normalized Holding Document]
+    C --> D
+    D --> E[(MongoDB portfolios collection)]
 ```
 
 ### Pending Prospects Pipeline
