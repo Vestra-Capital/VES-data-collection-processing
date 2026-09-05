@@ -172,17 +172,19 @@ def _calculate_total_cash(cash_data: Any) -> float:
     return total
 
 
-def _build_aum_document(client: Dict[str, Any], portfolio: Dict[str, Any]) -> Dict[str, Any]:
+def _build_aum_document(client: Dict[str, Any], portfolio: Dict[str, Any], rate: float = FEES_REPORT_RATE) -> Dict[str, Any]:
     """Build an AUM document for a single client/account.
 
     Args:
         client: Client document dict from the ``clients`` collection.
         portfolio: Portfolio document dict from the ``portfolios`` collection,
             or an empty dict if the client has no portfolio.
+        rate: Annual fee rate as a percentage.
 
     Returns:
         AUM document dict containing ``accountNumber``, identity fields,
-        ``totalHoldings``, ``totalCash``, ``totalAUM``, and ``generatedAt``.
+        ``totalHoldings``, ``totalCash``, ``totalAUM``, ``feeReportRate``,
+        ``collectedFees``, ``selected``, and ``generatedAt``.
     """
     account_number = str(client.get("accountNumber", ""))
     holdings = portfolio.get("holdings", []) or []
@@ -191,6 +193,8 @@ def _build_aum_document(client: Dict[str, Any], portfolio: Dict[str, Any]) -> Di
     total_holdings = _calculate_total_holdings(holdings)
     total_cash = _calculate_total_cash(cash_data)
     total_aum = total_holdings + total_cash
+    days_in_year = 366 if _is_leap_year(datetime.now(timezone.utc).year) else 365
+    collected_fees = round((total_aum * (rate / 100)) / days_in_year, 2)
 
     return {
         "accountNumber": account_number,
@@ -198,6 +202,8 @@ def _build_aum_document(client: Dict[str, Any], portfolio: Dict[str, Any]) -> Di
         "totalHoldings": round(total_holdings, 2),
         "totalCash": round(total_cash, 2),
         "totalAUM": round(total_aum, 2),
+        "feeReportRate": rate,
+        "collectedFees": collected_fees,
         "selected": True,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
     }
@@ -208,24 +214,54 @@ def _generate_run_id() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _backfill_missing_fee_fields() -> None:
+    """Backfill ``feeReportRate`` and ``collectedFees`` for existing documents.
+
+    Finds any document in the ``fees`` collection missing ``feeReportRate``
+    or ``collectedFees`` and updates them using the current default rate
+    and the document's existing ``totalAUM``.
+    """
+    client = _get_mongo_client()
+    try:
+        db = client[DATABASE_NAME]
+        collection = db[FEES_COLLECTION]
+
+        updated = 0
+        for doc in collection.find({"$or": [{"feeReportRate": {"$exists": False}}, {"collectedFees": {"$exists": False}}]}):
+            total_aum = _to_float(doc.get("totalAUM"))
+            rate = _to_float(doc.get("feeReportRate", FEES_REPORT_RATE))
+            days_in_year = 366 if _is_leap_year(datetime.now(timezone.utc).year) else 365
+            collected_fees = round((total_aum * (rate / 100)) / days_in_year, 2)
+
+            collection.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {"feeReportRate": rate, "collectedFees": collected_fees}},
+            )
+            updated += 1
+
+        if updated:
+            print(f"Backfilled {updated} document(s) in '{DATABASE_NAME}.{FEES_COLLECTION}' with missing fee fields.")
+    except PyMongoError as e:
+        raise RuntimeError(f"Failed to backfill missing fee fields: {e}") from e
+    finally:
+        client.close()
+
+
 def insert_aum(documents: List[Dict[str, Any]]) -> None:
-    """Insert AUM documents into the ``fees`` collection.
+    """Upsert AUM documents into the ``fees`` collection.
 
-    Each document is inserted as a new record.  Duplicate ``accountNumber``
-    values are allowed so that historical snapshots accumulate over time.
-
-    A document is considered a duplicate if another document with the same
-    ``accountNumber`` and ``generatedAt`` date already exists in the
-    collection.  Such duplicates are skipped.
+    Each document is keyed by ``accountNumber`` and ``generatedAt`` date.
+    If a matching document already exists, it is updated with the latest
+    values.  Otherwise, a new document is inserted.
 
     Args:
-        documents: List of AUM document dicts to insert.
+        documents: List of AUM document dicts to upsert.
 
     Raises:
-        RuntimeError: If the MongoDB connection or insert operation fails.
+        RuntimeError: If the MongoDB connection or upsert operation fails.
     """
     if not documents:
-        print("No AUM documents to insert.")
+        print("No AUM documents to upsert.")
         return
 
     client = _get_mongo_client()
@@ -234,29 +270,31 @@ def insert_aum(documents: List[Dict[str, Any]]) -> None:
         collection = db[FEES_COLLECTION]
 
         inserted = 0
-        skipped = 0
+        updated = 0
         for doc in documents:
             account_number = doc.get("accountNumber")
             generated_at = doc.get("generatedAt", "")
             date_part = generated_at.split("T")[0] if generated_at else ""
 
-            if account_number and date_part:
-                existing = collection.find_one({
+            if not account_number or not date_part:
+                continue
+
+            result = collection.update_one(
+                {
                     "accountNumber": account_number,
                     "generatedAt": {"$regex": f"^{date_part}"},
-                })
-                if existing:
-                    skipped += 1
-                    continue
+                },
+                {"$set": doc},
+                upsert=True,
+            )
+            if result.upserted_id:
+                inserted += 1
+            elif result.modified_count:
+                updated += 1
 
-            collection.insert_one(doc)
-            inserted += 1
-
-        print(f"Inserted {inserted} AUM document(s) into '{DATABASE_NAME}.{FEES_COLLECTION}'.")
-        if skipped:
-            print(f"Skipped {skipped} duplicate AUM document(s).")
+        print(f"Upserted {inserted + updated} AUM document(s) into '{DATABASE_NAME}.{FEES_COLLECTION}' ({inserted} inserted, {updated} updated).")
     except PyMongoError as e:
-        raise RuntimeError(f"Failed to insert AUM documents into MongoDB: {e}") from e
+        raise RuntimeError(f"Failed to upsert AUM documents into MongoDB: {e}") from e
     finally:
         client.close()
 
@@ -312,8 +350,11 @@ def generate_daily_fee_report(rate: float = FEES_REPORT_RATE) -> None:
     rows: List[Dict[str, Any]] = []
     for doc in documents:
         aum = _to_float(doc.get("totalAUM"))
-        annual_fee = aum * (rate / 100)
-        daily_fee = annual_fee / days_in_year
+        doc_rate = _to_float(doc.get("feeReportRate", rate))
+        daily_fee = _to_float(doc.get("collectedFees"))
+        if not daily_fee:
+            annual_fee = aum * (doc_rate / 100)
+            daily_fee = annual_fee / days_in_year
 
         rows.append({
             "Account": str(doc.get("accountNumber", "")),
@@ -322,7 +363,7 @@ def generate_daily_fee_report(rate: float = FEES_REPORT_RATE) -> None:
             "Holdings": f"{_to_float(doc.get('totalHoldings')):.2f}",
             "Cash": f"{_to_float(doc.get('totalCash')):.2f}",
             "AUM": f"{aum:.2f}",
-            "Rate": f"{rate:.2f}%",
+            "Rate": f"{doc_rate:.2f}%",
             "Fee": f"{daily_fee:.2f}",
             "Selected": "true" if doc.get("selected", True) else "false",
         })
@@ -376,6 +417,7 @@ def main() -> None:
     else:
         print("No AUM documents collected; skipping database insert.")
 
+    _backfill_missing_fee_fields()
     generate_daily_fee_report()
 
 
