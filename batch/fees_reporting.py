@@ -8,6 +8,7 @@ SCRIPTS = [
     "data/001_get_trading_account.py",
     "data/002_get_portfolio_holdings.py",
     "data/003_get_cash_balances.py",
+    "batch/get_instruments.py",
     "data/005_get_data_for_fees_reporting.py",
 ]
 

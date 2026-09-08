@@ -1,14 +1,10 @@
 """Assets under management (AUM) collector for fees reporting.
 
-Reads the MongoDB ``clients`` and ``portfolios`` collections and produces a
-per-client AUM snapshot:
+Reads the MongoDB ``clients``, ``portfolios``, and ``instruments`` collections
+and produces a per-client AUM snapshot with daily P&L:
 
     total_holdings + total_cash = total_aum
-
-where:
-
-- ``total_holdings`` is the sum of ``marketValue`` across all equity holdings.
-- ``total_cash`` is the sum of ``bankBalance`` across all cash bank accounts.
+    totalPnl = sum((currentPrice or marketPrice - averageCost) * totalHolding)
 
 The resulting records are upserted into the ``fees`` collection
 keyed by ``accountNumber``.  Each document is stamped with ``generatedAt``
@@ -16,15 +12,15 @@ so that historical AUM snapshots can be retained.
 
 Typical usage::
 
-    python data/get_data_for_fees.py
+    python data/005_get_data_for_fees_reporting.py
 
 Environment variables required:
 
-    MONGODB_SRV: MongoDB connection string.
-    DATABASE_NAME: Database name (defaults to ``VESTRA_PROD``).
+    MONGODB_SRV — MongoDB connection string.
+    DATABASE_NAME — Database name (defaults to ``VESTRA_PROD``).
+    FEES_REPORT_RATE — Annual fee rate as a percentage (defaults to ``1.5``).
 """
 
-import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -41,6 +37,7 @@ logger = logging.getLogger(__name__)
 DATABASE_NAME = os.getenv("DATABASE_NAME", "VESTRA_PROD")
 CLIENTS_COLLECTION = "clients"
 PORTFOLIOS_COLLECTION = "portfolios"
+INSTRUMENTS_COLLECTION = "instruments"
 FEES_COLLECTION = "fees"
 FEES_REPORT_RATE = float(os.getenv("FEES_REPORT_RATE", "1.5"))
 
@@ -96,7 +93,7 @@ def _fetch_portfolios() -> Dict[str, Dict[str, Any]]:
     try:
         db = client[DATABASE_NAME]
         collection = db[PORTFOLIOS_COLLECTION]
-        documents = list(collection.find({}, {"_id": 0}))
+        documents = list(collection.find({}))
         portfolios: Dict[str, Dict[str, Any]] = {}
         for doc in documents:
             if isinstance(doc, dict):
@@ -106,6 +103,33 @@ def _fetch_portfolios() -> Dict[str, Dict[str, Any]]:
         return portfolios
     except PyMongoError as e:
         raise RuntimeError(f"Failed to fetch portfolios from MongoDB: {e}") from e
+    finally:
+        client.close()
+
+
+def _fetch_instruments() -> Dict[str, Dict[str, Any]]:
+    """Fetch all instrument documents keyed by ``symbol``.
+
+    Returns:
+        Dictionary mapping each ``symbol`` string to its instrument document.
+
+    Raises:
+        RuntimeError: If the MongoDB connection or query fails.
+    """
+    client = _get_mongo_client()
+    try:
+        db = client[DATABASE_NAME]
+        collection = db[INSTRUMENTS_COLLECTION]
+        documents = list(collection.find({}))
+        instruments: Dict[str, Dict[str, Any]] = {}
+        for doc in documents:
+            if isinstance(doc, dict):
+                symbol = doc.get("symbol")
+                if symbol:
+                    instruments[str(symbol)] = doc
+        return instruments
+    except PyMongoError as e:
+        raise RuntimeError(f"Failed to fetch instruments from MongoDB: {e}") from e
     finally:
         client.close()
 
@@ -172,6 +196,66 @@ def _calculate_total_cash(cash_data: Any) -> float:
     return total
 
 
+def _build_symbol(holding: Dict[str, Any]) -> str:
+    """Build the Yahoo Finance symbol from a holding's security code and market code.
+
+    Args:
+        holding: Single holding dict from the portfolio document.
+
+    Returns:
+        Symbol string in the format ``securityCode.marketCode_yf``.
+    """
+    security_code = holding.get("securityCode", "")
+    market_code_yf = holding.get("marketCode_yf", "")
+    if security_code and market_code_yf:
+        return f"{security_code}.{market_code_yf}"
+    return ""
+
+
+def _calculate_account_pnl(holdings: List[Dict[str, Any]], instruments: Dict[str, Dict[str, Any]]) -> float:
+    """Calculate the total P&L for an account.
+
+    Uses ``currentPrice`` from the instruments collection as the primary
+    price source.  Falls back to ``marketPrice`` from the portfolio holding
+    document if ``currentPrice`` is missing or invalid.
+
+    Args:
+        holdings: List of holding dicts from the portfolio document.
+        instruments: Dictionary mapping symbol strings to instrument documents.
+
+    Returns:
+        Total P&L for the account as a float.
+    """
+    total_pnl = 0.0
+    if not isinstance(holdings, list):
+        return total_pnl
+
+    for holding in holdings:
+        if not isinstance(holding, dict):
+            continue
+
+        symbol = _build_symbol(holding)
+        if not symbol:
+            continue
+
+        instrument = instruments.get(symbol)
+        current_price = _to_float(instrument.get("currentPrice")) if instrument else 0.0
+        market_price = _to_float(holding.get("marketPrice"))
+
+        effective_price = current_price if current_price > 0 else market_price
+        if effective_price <= 0:
+            continue
+
+        average_cost = _to_float(holding.get("averageCost"))
+        total_holding = _to_float(holding.get("totalHolding"))
+
+        cost_value = average_cost * total_holding
+        market_value = effective_price * total_holding
+        total_pnl += market_value - cost_value
+
+    return total_pnl
+
+
 def _build_aum_document(client: Dict[str, Any], portfolio: Dict[str, Any], rate: float = FEES_REPORT_RATE) -> Dict[str, Any]:
     """Build an AUM document for a single client/account.
 
@@ -184,7 +268,8 @@ def _build_aum_document(client: Dict[str, Any], portfolio: Dict[str, Any], rate:
     Returns:
         AUM document dict containing ``accountNumber``, identity fields,
         ``totalHoldings``, ``totalCash``, ``totalAUM``, ``feeReportRate``,
-        ``collectedFees``, ``selected``, and ``generatedAt``.
+        ``collectedFees``, ``totalPnl``, ``selected``, and
+        ``generatedAt``.
     """
     account_number = str(client.get("accountNumber", ""))
     holdings = portfolio.get("holdings", []) or []
@@ -204,6 +289,7 @@ def _build_aum_document(client: Dict[str, Any], portfolio: Dict[str, Any], rate:
         "totalAUM": round(total_aum, 2),
         "feeReportRate": rate,
         "collectedFees": collected_fees,
+        "totalPnl": 0.0,
         "selected": True,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
     }
@@ -243,6 +329,33 @@ def _backfill_missing_fee_fields() -> None:
             print(f"Backfilled {updated} document(s) in '{DATABASE_NAME}.{FEES_COLLECTION}' with missing fee fields.")
     except PyMongoError as e:
         raise RuntimeError(f"Failed to backfill missing fee fields: {e}") from e
+    finally:
+        client.close()
+
+
+def _backfill_missing_pnl_fields() -> None:
+    """Backfill ``totalPnl`` for existing documents missing the field.
+
+    Finds any document in the ``fees`` collection missing ``totalPnl``
+    and sets it to ``0.0``.
+    """
+    client = _get_mongo_client()
+    try:
+        db = client[DATABASE_NAME]
+        collection = db[FEES_COLLECTION]
+
+        updated = 0
+        for doc in collection.find({"totalPnl": {"$exists": False}}):
+            collection.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {"totalPnl": 0.0}},
+            )
+            updated += 1
+
+        if updated:
+            print(f"Backfilled {updated} document(s) in '{DATABASE_NAME}.{FEES_COLLECTION}' with missing totalPnl field.")
+    except PyMongoError as e:
+        raise RuntimeError(f"Failed to backfill missing totalPnl fields: {e}") from e
     finally:
         client.close()
 
@@ -365,23 +478,24 @@ def generate_daily_fee_report(rate: float = FEES_REPORT_RATE) -> None:
             "AUM": f"{aum:.2f}",
             "Rate": f"{doc_rate:.2f}%",
             "Fee": f"{daily_fee:.2f}",
+            "P&L": f"{_to_float(doc.get('totalPnl')):.2f}",
             "Selected": "true" if doc.get("selected", True) else "false",
         })
 
     rows.sort(key=lambda x: x["Account"])
 
     print(f"\nDaily Fee Report (Rate: {rate}%/annum, Date: {date_str})")
-    print("-" * 145)
-    print(f"{'Account':<15} {'AccountName':<25} {'Date':<12} {'Holdings':<15} {'Cash':<15} {'AUM':<15} {'Rate':<8} {'Fee':<15} {'Selected':<10}")
-    print("-" * 145)
+    print("-" * 165)
+    print(f"{'Account':<15} {'AccountName':<25} {'Date':<12} {'Holdings':<15} {'Cash':<15} {'AUM':<15} {'Rate':<8} {'Fee':<15} {'P&L':<15} {'Selected':<10}")
+    print("-" * 165)
     for row in rows:
-        print(f"{row['Account']:<15} {row['AccountName']:<25} {row['Date']:<12} {row['Holdings']:<15} {row['Cash']:<15} {row['AUM']:<15} {row['Rate']:<8} {row['Fee']:<15} {row['Selected']:<10}")
-    print("-" * 145)
+        print(f"{row['Account']:<15} {row['AccountName']:<25} {row['Date']:<12} {row['Holdings']:<15} {row['Cash']:<15} {row['AUM']:<15} {row['Rate']:<8} {row['Fee']:<15} {row['P&L']:<15} {row['Selected']:<10}")
+    print("-" * 165)
     print(f"Total accounts: {len(rows)}\n")
 
 
 def main() -> None:
-    """Collect AUM data for each client and upsert into MongoDB."""
+    """Collect AUM and P&L data for each client and upsert into MongoDB."""
     clients = _fetch_clients()
 
     if not clients:
@@ -392,6 +506,9 @@ def main() -> None:
 
     portfolios = _fetch_portfolios()
     print(f"Fetched {len(portfolios)} portfolio document(s) from MongoDB 'portfolios' collection.")
+
+    instruments = _fetch_instruments()
+    print(f"Fetched {len(instruments)} instrument(s) from MongoDB '{INSTRUMENTS_COLLECTION}' collection.")
 
     seen_account_numbers = set()
     skipped_missing_account = 0
@@ -408,9 +525,14 @@ def main() -> None:
 
         portfolio = portfolios.get(account_number, {})
         aum_doc = _build_aum_document(client, portfolio)
+
+        holdings = portfolio.get("holdings", []) or []
+        total_pnl = _calculate_account_pnl(holdings, instruments)
+        aum_doc["totalPnl"] = round(total_pnl, 2)
+
         aum_documents.append(aum_doc)
 
-    print(f"\nSummary: {len(aum_documents)} AUM record(s) built, {skipped_missing_account} skipped (missing accountNumber).")
+    print(f"\nSummary: {len(aum_documents)} AUM/P&L record(s) built, {skipped_missing_account} skipped (missing accountNumber).")
 
     if aum_documents:
         insert_aum(aum_documents)
@@ -418,6 +540,7 @@ def main() -> None:
         print("No AUM documents collected; skipping database insert.")
 
     _backfill_missing_fee_fields()
+    _backfill_missing_pnl_fields()
     generate_daily_fee_report()
 
 
