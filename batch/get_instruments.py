@@ -6,9 +6,9 @@ Reads all documents from the ``portfolios`` collection, flattens the holdings
 arrays, deduplicates by ``symbol`` (``securityCode.marketCode_yf``), and
 upserts the resulting instrument documents into the ``instruments`` collection.
 
-Instruments that already have ``sector``, ``industry``, and ``dividend_yield``
-stored are skipped; only instruments missing at least one of these fields are
-enriched via the configured market data provider.
+Instruments that already have ``sector``, ``industry``, ``dividend_yield``,
+and ``currentPrice`` stored are skipped; only instruments missing at least
+one of these fields are enriched via the configured market data provider.
 
 Columns produced:
     - symbol
@@ -19,6 +19,7 @@ Columns produced:
     - sector (enriched)
     - industry (enriched)
     - dividend_yield (enriched)
+    - currentPrice (enriched)
 
 Environment variables:
     MONGODB_SRV — MongoDB connection string.
@@ -141,6 +142,7 @@ def _fetch_instruments_missing_metadata(db_name: str, symbols: list) -> Dict[str
                 {"sector": {"$exists": False}},
                 {"industry": {"$exists": False}},
                 {"dividend_yield": {"$exists": False}},
+                {"currentPrice": {"$exists": False}},
             ],
         }
         cursor = collection.find(query, {"_id": 0})
@@ -231,7 +233,7 @@ def main() -> None:
     print(f"Checking {len(symbols)} instrument(s) for missing metadata in '{db_name}.instruments'...")
     existing_docs = _fetch_instruments_missing_metadata(db_name, symbols)
     missing_count = len(existing_docs)
-    print(f"Found {missing_count} instrument(s) missing sector/industry/dividend_yield.")
+    print(f"Found {missing_count} instrument(s) missing sector/industry/dividend_yield/currentPrice.")
 
     if missing_count == 0:
         print("All instruments already have metadata; nothing to enrich.")

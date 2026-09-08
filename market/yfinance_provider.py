@@ -32,4 +32,8 @@ class YFinanceProvider(MarketDataProvider):
             dividend_yield = 0.0
         result["dividend_yield"] = dividend_yield
 
+        current_price = info.get("currentPrice")
+        if current_price is not None:
+            result["currentPrice"] = current_price
+
         return result
