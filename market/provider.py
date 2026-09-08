@@ -6,24 +6,24 @@ implementations can be added without touching the consumers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Any, Callable, Dict
 
 
 class MarketDataProvider(ABC):
-    """Interface for fetching instrument metadata from a market data provider."""
+    """Interface for fetching instrument metadata and current prices."""
 
     @abstractmethod
     def fetch_instrument_metadata(self, symbol: str) -> Dict[str, Any]:
-        """Fetch metadata for a single instrument.
+        """Fetch static metadata for a single instrument."""
+
+    @abstractmethod
+    def fetch_current_prices(self, symbols: list) -> Dict[str, float]:
+        """Fetch the current price for multiple symbols.
 
         Args:
-            symbol: The instrument ticker symbol (e.g. ``"CBA.AX"``).
+            symbols: List of instrument ticker symbols.
 
         Returns:
-            A dictionary that may contain the following keys:
-                - ``sector``
-                - ``industry``
-                - ``dividend_yield``
-            Keys for fields that are not available from the provider are
-            omitted.
+            Mapping of ``symbol`` to current price. Symbols that could not
+            be fetched are omitted.
         """

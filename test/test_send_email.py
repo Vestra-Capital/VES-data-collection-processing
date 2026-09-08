@@ -17,7 +17,7 @@ import os
 # Configure logging before importing project modules so that all log
 # output uses the same format and level from the start.
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 
@@ -25,7 +25,7 @@ logging.basicConfig(
 # regardless of the working directory from which this script is invoked.
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from email.send_email import send_email
+from mailer.send_email import send_email
 
 
 def main():

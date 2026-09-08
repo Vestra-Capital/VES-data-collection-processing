@@ -35,11 +35,11 @@ project_root = Path(__file__).resolve().parent.parent
 # Load environment variables from the project root ``.env`` file.
 load_dotenv(project_root / ".env")
 
-# ``send_email`` lives in the ``email`` package at the project root.  We load
+# ``send_email`` lives in the ``mailer`` package at the project root.  We load
 # it dynamically here because this script is invoked directly (not as part of
-# the ``email`` package) and a standard absolute import would require
+# the ``mailer`` package) and a standard absolute import would require
 # manipulating ``sys.path`` in a less explicit way.
-send_email_module_path = project_root / "email" / "send_email.py"
+send_email_module_path = project_root / "mailer" / "send_email.py"
 _spec = importlib.util.spec_from_file_location("send_email", send_email_module_path)
 _send_email_module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_send_email_module)
@@ -169,7 +169,7 @@ def send_pending_prospects_email(recipient: str | None = None) -> None:
     Queries the ``prospects`` collection for documents whose ``status``
     field equals ``"Pending"`` (case-insensitive), builds an HTML table
     of the matching records, and sends the report to the specified
-    recipient via :func:`email.send_email.send_email`.
+        recipient via :func:`mailer.send_email.send_email`.
 
     Args:
         recipient: Optional override for the report recipient.  When

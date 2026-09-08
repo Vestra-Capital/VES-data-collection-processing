@@ -10,7 +10,7 @@ Environment variables required:
 
 Typical usage::
 
-    from email.send_email import send_email
+    from mailer.send_email import send_email
     send_email({
         'email': 'client@example.com',
         'subject': 'Your Portfolio Update',
@@ -25,11 +25,11 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-# Load environment variables from the project .env file so the module
-# can be used directly without requiring the caller to export variables.
-# We resolve the path relative to this file so it works regardless of
-# the process's current working directory.
-load_dotenv(Path(__file__).resolve().parent / '.env')
+# Load environment variables from the project root ``.env`` file so the
+# module can be used directly without requiring the caller to export
+# variables. We resolve the path relative to this file so it works
+# regardless of the process's current working directory.
+load_dotenv(Path(__file__).resolve().parent.parent / '.env')
 
 # Module-level logger for email sending operations.
 logger = logging.getLogger(__name__)
@@ -110,9 +110,6 @@ def send_email(options):
             headers=headers,
             json=payload,
         )
-
-        logger.debug('Brevo API response status: %s', response.status_code)
-        logger.debug('Brevo API response body: %s', response.text)
 
         response.raise_for_status()
 
