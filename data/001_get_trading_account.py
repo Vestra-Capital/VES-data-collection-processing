@@ -381,24 +381,6 @@ def upsert_clients(documents: List[Dict[str, Any]]) -> None:
             if idx % 50 == 0 or idx == total:
                 logger.info("Upsert progress: %d/%d document(s) processed.", idx, total)
 
-        # Remove documents whose ``accountNumber`` is not present in the
-        # current active batch.  This purges accounts that are no longer
-        # returned by the Morrison API (i.e. inactive accounts).
-        if active_account_numbers:
-            logger.info("Removing inactive document(s) from '%s.clients'...", db_name)
-            delete_filter = {
-                "accountNumber": {
-                    "$nin": list(active_account_numbers),
-                    "$exists": True,
-                    "$ne": None,
-                }
-            }
-            delete_result = collection.delete_many(delete_filter)
-            if delete_result.deleted_count:
-                logger.info("Removed %d inactive document(s) from '%s.clients'.", delete_result.deleted_count, db_name)
-            else:
-                logger.info("No inactive document(s) to remove from '%s.clients'.", db_name)
-
         logger.info("Upserted %d document(s) into '%s.clients'.", upserted, db_name)
     except PyMongoError as e:
         raise RuntimeError(f"Failed to upsert documents into MongoDB: {e}") from e

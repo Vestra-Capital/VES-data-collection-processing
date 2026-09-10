@@ -310,21 +310,6 @@ def upsert_portfolios(documents: List[Dict[str, Any]], active_account_numbers: s
             upserted += 1
 
         print(f"Upserted {upserted} document(s) into '{db_name}.portfolios'.")
-
-        if active_account_numbers:
-            print("Removing inactive/empty portfolio document(s)...")
-            delete_filter = {
-                "accountNumber": {
-                    "$nin": list(active_account_numbers),
-                    "$exists": True,
-                    "$ne": None,
-                }
-            }
-            delete_result = collection.delete_many(delete_filter)
-            if delete_result.deleted_count:
-                print(f"Removed {delete_result.deleted_count} inactive/empty portfolio document(s).")
-            else:
-                print("No inactive/empty portfolio document(s) to remove.")
     except PyMongoError as e:
         raise RuntimeError(f"Failed to upsert documents into MongoDB: {e}") from e
     finally:

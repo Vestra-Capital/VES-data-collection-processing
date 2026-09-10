@@ -368,21 +368,6 @@ def upsert_trades(documents: List[Dict[str, Any]]) -> None:
             if idx % 50 == 0 or idx == total:
                 print(f"Upsert progress: {idx}/{total} trade document(s) processed.")
 
-        if active_account_numbers:
-            print(f"Removing trades for inactive account(s) from '{db_name}.trades'...")
-            delete_filter = {
-                "accountNumber": {
-                    "$nin": list(active_account_numbers),
-                    "$exists": True,
-                    "$ne": None,
-                }
-            }
-            delete_result = collection.delete_many(delete_filter)
-            if delete_result.deleted_count:
-                print(f"Removed {delete_result.deleted_count} trade document(s) for inactive account(s) from '{db_name}.trades'.")
-            else:
-                print(f"No inactive trade document(s) to remove from '{db_name}.trades'.")
-
         print(f"Upserted {upserted} trade document(s) into '{db_name}.trades'.")
     except PyMongoError as e:
         raise RuntimeError(f"Failed to upsert trades into MongoDB: {e}") from e
