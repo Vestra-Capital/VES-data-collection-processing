@@ -1,6 +1,6 @@
 """Yahoo Finance implementation of the market data provider abstraction."""
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import yfinance as yf
 
@@ -77,4 +77,39 @@ class YFinanceProvider(MarketDataProvider):
             except (TypeError, ValueError, IndexError):
                 continue
 
+        return result
+
+    def fetch_instrument_timeseries(self, symbol: str, period: str = "1y") -> List[Dict[str, Any]]:
+        """Fetch historical price timeseries for a single instrument from Yahoo Finance.
+
+        Args:
+            symbol: Yahoo Finance ticker symbol.
+            period: Look-back window recognised by yfinance (default ``1y``).
+
+        Returns:
+            List of ``{"date": str, "price": float}`` dicts sorted by date
+            ascending.  Returns an empty list if no history is available.
+        """
+        if not symbol:
+            return []
+
+        try:
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period=period, auto_adjust=True)
+        except Exception:
+            return []
+
+        if hist is None or hist.empty:
+            return []
+
+        result: List[Dict[str, Any]] = []
+        for idx, row in hist.iterrows():
+            try:
+                date_str = idx.strftime("%Y-%m-%d")
+                price = float(row["Close"])
+                result.append({"date": date_str, "price": price})
+            except (TypeError, ValueError, AttributeError):
+                continue
+
+        result.sort(key=lambda item: item["date"])
         return result
