@@ -100,6 +100,30 @@ def _build_instrument_price_map(instruments: List[Dict[str, Any]]) -> Dict[str, 
     return price_map
 
 
+def _smooth_price_map(
+    price_map: Dict[str, Dict[str, float]],
+) -> Dict[str, Dict[str, float]]:
+    all_dates = sorted({date for dates in price_map.values() for date in dates})
+    if not all_dates:
+        return price_map
+
+    smoothed: Dict[str, Dict[str, float]] = {}
+    for symbol, date_prices in price_map.items():
+        filled: Dict[str, float] = {}
+        last_price: float = 0.0
+
+        for date in all_dates:
+            if date in date_prices:
+                last_price = date_prices[date]
+            if last_price > 0:
+                filled[date] = last_price
+
+        if filled:
+            smoothed[symbol] = filled
+
+    return smoothed
+
+
 def _calculate_nav_timeseries(
     holdings: List[Dict[str, Any]],
     price_map: Dict[str, Dict[str, float]],
@@ -196,13 +220,16 @@ def main() -> None:
     price_map = _build_instrument_price_map(instruments)
     print(f"Built price map for {len(price_map)} instrument(s).")
 
+    smoothed_price_map = _smooth_price_map(price_map)
+    print(f"Smoothed price map for {len(smoothed_price_map)} instrument(s).")
+
     updated = 0
     failed: List[str] = []
 
     for portfolio, holdings in portfolio_holdings:
         account_number = portfolio.get("accountNumber", "N/A")
         try:
-            nav_timeseries = _calculate_nav_timeseries(holdings, price_map)
+            nav_timeseries = _calculate_nav_timeseries(holdings, smoothed_price_map)
             _update_portfolio_nav(db_name, portfolio, nav_timeseries)
             print(f"Updated NAV for accountNumber={account_number}: {len(nav_timeseries)} date(s).")
             updated += 1
