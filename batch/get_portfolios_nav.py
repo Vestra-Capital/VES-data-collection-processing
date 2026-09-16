@@ -113,7 +113,7 @@ def _smooth_price_map(
         last_price: float = 0.0
 
         for date in all_dates:
-            if date in date_prices:
+            if date in date_prices and date_prices[date] > 0:
                 last_price = date_prices[date]
             if last_price > 0:
                 filled[date] = last_price

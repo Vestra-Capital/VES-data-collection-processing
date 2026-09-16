@@ -6,6 +6,10 @@ and produces a per-client AUM snapshot with daily P&L:
     total_holdings + total_cash = total_aum
     totalPnl = sum((currentPrice or marketPrice - averageCost) * totalHolding)
 
+``total_holdings`` is taken from the latest entry in the portfolio's
+``nav_timeseries`` array (populated by ``batch/get_portfolios_nav.py``),
+not by summing ``marketValue`` across holdings.
+
 The resulting records are upserted into the ``fees`` collection
 keyed by ``accountNumber``.  Each document is stamped with ``generatedAt``
 so that historical AUM snapshots can be retained.
@@ -200,25 +204,6 @@ def _latest_nav_on_or_before(
             break
 
     return latest_nav
-
-
-def _calculate_total_holdings(holdings: List[Dict[str, Any]]) -> float:
-    """Sum the market value of all equity holdings for an account.
-
-    Args:
-        holdings: List of holding dicts from the portfolio document.
-
-    Returns:
-        Total holdings value as a float.
-    """
-    total = 0.0
-    if not isinstance(holdings, list):
-        return total
-    for holding in holdings:
-        if not isinstance(holding, dict):
-            continue
-        total += _to_float(holding.get("marketValue"))
-    return total
 
 
 def _calculate_total_cash(cash_data: Any) -> float:
@@ -582,6 +567,7 @@ def main() -> None:
 
         portfolio = portfolios.get(account_number, {})
         nav_timeseries = portfolio.get("nav_timeseries") or []
+        # total_holdings is the latest NAV value from the portfolio's nav_timeseries
         total_holdings = _latest_nav_on_or_before(nav_timeseries, now)
         if total_holdings is None:
             total_holdings = 0.0

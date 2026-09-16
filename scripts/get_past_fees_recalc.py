@@ -176,15 +176,16 @@ def _latest_price_on_or_before(
     date_prices: Dict[str, float],
     target_date: date,
 ) -> Optional[float]:
-    latest_price: Optional[float] = None
     target_str = target_date.strftime("%Y-%m-%d")
+    latest_price: Optional[float] = None
 
     sorted_dates = sorted(date_prices.keys())
     for date_str in sorted_dates:
-        if date_str <= target_str:
-            latest_price = date_prices[date_str]
-        else:
+        if date_str > target_str:
             break
+        price = date_prices[date_str]
+        if price > 0:
+            latest_price = price
 
     return latest_price
 
