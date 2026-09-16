@@ -24,7 +24,7 @@ Environment variables required:
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -155,6 +155,53 @@ def _to_float(value: Any) -> float:
     return 0.0
 
 
+def _is_leap_year(year: int) -> bool:
+    """Return True if the given year is a leap year."""
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+
+def _days_in_year(d: datetime) -> int:
+    """Return the number of days in the year of the given datetime."""
+    return 366 if _is_leap_year(d.year) else 365
+
+
+def _latest_nav_on_or_before(
+    nav_timeseries: List[Dict[str, Any]],
+    target_date: datetime,
+) -> Optional[float]:
+    """Return the latest ``nav`` from ``nav_timeseries`` on or before ``target_date``.
+
+    Args:
+        nav_timeseries: List of ``{"date": "YYYY-MM-DD", "nav": float}`` dicts.
+        target_date: The cutoff datetime. Only entries with a date on or before
+            this datetime are considered.
+
+    Returns:
+        The latest ``nav`` value as a float, or ``None`` if no matching entry
+        exists.
+    """
+    latest_nav: Optional[float] = None
+    target_date_only = target_date.date()
+
+    for entry in nav_timeseries:
+        if not isinstance(entry, dict):
+            continue
+        raw_date = entry.get("date")
+        nav = _to_float(entry.get("nav"))
+        if not raw_date or nav <= 0:
+            continue
+        try:
+            entry_date = datetime.strptime(raw_date, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            continue
+        if entry_date <= target_date_only:
+            latest_nav = nav
+        else:
+            break
+
+    return latest_nav
+
+
 def _calculate_total_holdings(holdings: List[Dict[str, Any]]) -> float:
     """Sum the market value of all equity holdings for an account.
 
@@ -256,7 +303,12 @@ def _calculate_account_pnl(holdings: List[Dict[str, Any]], instruments: Dict[str
     return total_pnl
 
 
-def _build_aum_document(client: Dict[str, Any], portfolio: Dict[str, Any], rate: float = FEES_REPORT_RATE) -> Dict[str, Any]:
+def _build_aum_document(
+    client: Dict[str, Any],
+    portfolio: Dict[str, Any],
+    rate: float = FEES_REPORT_RATE,
+    total_holdings: Optional[float] = None,
+) -> Dict[str, Any]:
     """Build an AUM document for a single client/account.
 
     Args:
@@ -264,6 +316,8 @@ def _build_aum_document(client: Dict[str, Any], portfolio: Dict[str, Any], rate:
         portfolio: Portfolio document dict from the ``portfolios`` collection,
             or an empty dict if the client has no portfolio.
         rate: Annual fee rate as a percentage.
+        total_holdings: Total holdings value to use.  This must be provided;
+            it is not derived from ``marketValue``.
 
     Returns:
         AUM document dict containing ``accountNumber``, identity fields,
@@ -271,11 +325,12 @@ def _build_aum_document(client: Dict[str, Any], portfolio: Dict[str, Any], rate:
         ``collectedFees``, ``totalPnl``, ``selected``, and
         ``generatedAt``.
     """
+    if total_holdings is None:
+        raise ValueError("total_holdings must be provided and cannot be None.")
+
     account_number = str(client.get("accountNumber", ""))
-    holdings = portfolio.get("holdings", []) or []
     cash_data = portfolio.get("cash") or {}
 
-    total_holdings = _calculate_total_holdings(holdings)
     total_cash = _calculate_total_cash(cash_data)
     total_aum = total_holdings + total_cash
     days_in_year = 366 if _is_leap_year(datetime.now(timezone.utc).year) else 365
@@ -514,6 +569,8 @@ def main() -> None:
     skipped_missing_account = 0
     aum_documents: List[Dict[str, Any]] = []
 
+    now = datetime.now(timezone.utc)
+
     for client in clients:
         account_number = str(client.get("accountNumber", ""))
         if not account_number:
@@ -524,7 +581,12 @@ def main() -> None:
         seen_account_numbers.add(account_number)
 
         portfolio = portfolios.get(account_number, {})
-        aum_doc = _build_aum_document(client, portfolio)
+        nav_timeseries = portfolio.get("nav_timeseries") or []
+        total_holdings = _latest_nav_on_or_before(nav_timeseries, now)
+        if total_holdings is None:
+            total_holdings = 0.0
+
+        aum_doc = _build_aum_document(client, portfolio, total_holdings=total_holdings)
 
         holdings = portfolio.get("holdings", []) or []
         total_pnl = _calculate_account_pnl(holdings, instruments)
