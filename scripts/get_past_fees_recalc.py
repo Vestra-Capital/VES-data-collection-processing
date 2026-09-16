@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 DATABASE_NAME = os.getenv("DATABASE_NAME", "VESTRA_PROD")
 FEES_REPORT_RATE = float(os.getenv("FEES_REPORT_RATE", "1.5"))
-DEFAULT_START_DATE = date(2026, 8, 1)
+DEFAULT_START_DATE = date(2026, 1, 1)
 
 
 def get_mongo_client() -> MongoClient:
@@ -85,6 +85,22 @@ def fetch_portfolios(db_name: str) -> List[Dict[str, Any]]:
         client.close()
 
 
+def fetch_instruments(db_name: str, symbols: List[str]) -> List[Dict[str, Any]]:
+    if not symbols:
+        return []
+
+    client = get_mongo_client()
+    try:
+        db = client[db_name]
+        collection = db["instruments"]
+        cursor = collection.find({"symbol": {"$in": symbols}}, {"_id": 0})
+        return [doc for doc in cursor if isinstance(doc, dict)]
+    except PyMongoError as e:
+        raise RuntimeError(f"Failed to fetch instruments: {e}") from e
+    finally:
+        client.close()
+
+
 def _sorted_nav_series(portfolio: Dict[str, Any]) -> List[Tuple[date, float]]:
     nav_timeseries = portfolio.get("nav_timeseries") or []
     if not isinstance(nav_timeseries, list):
@@ -121,12 +137,100 @@ def _latest_nav_on_or_before(
     return latest_nav
 
 
+def _build_symbol(holding: Dict[str, Any]) -> str:
+    security_code = holding.get("securityCode", "")
+    market_code_yf = holding.get("marketCode_yf", "")
+    if security_code and market_code_yf:
+        return f"{security_code}.{market_code_yf}"
+    return ""
+
+
+def _build_instrument_price_map(instruments: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+    price_map: Dict[str, Dict[str, float]] = {}
+
+    for instrument in instruments:
+        symbol = instrument.get("symbol")
+        if not symbol:
+            continue
+
+        timeseries = instrument.get("timeseries") or []
+        if not isinstance(timeseries, list):
+            continue
+
+        date_prices: Dict[str, float] = {}
+        for entry in timeseries:
+            if not isinstance(entry, dict):
+                continue
+            raw_date = entry.get("date")
+            price = entry.get("price")
+            if raw_date and price is not None:
+                date_prices[str(raw_date)] = _to_float(price)
+
+        if date_prices:
+            price_map[str(symbol)] = date_prices
+
+    return price_map
+
+
+def _latest_price_on_or_before(
+    date_prices: Dict[str, float],
+    target_date: date,
+) -> Optional[float]:
+    latest_price: Optional[float] = None
+    target_str = target_date.strftime("%Y-%m-%d")
+
+    sorted_dates = sorted(date_prices.keys())
+    for date_str in sorted_dates:
+        if date_str <= target_str:
+            latest_price = date_prices[date_str]
+        else:
+            break
+
+    return latest_price
+
+
+def _calculate_account_pnl(
+    holdings: List[Dict[str, Any]],
+    price_map: Dict[str, Dict[str, float]],
+    target_date: date,
+) -> float:
+    total_pnl = 0.0
+    if not isinstance(holdings, list):
+        return total_pnl
+
+    for holding in holdings:
+        if not isinstance(holding, dict):
+            continue
+
+        symbol = _build_symbol(holding)
+        if not symbol:
+            continue
+
+        date_prices = price_map.get(symbol)
+        if not date_prices:
+            continue
+
+        price = _latest_price_on_or_before(date_prices, target_date)
+        if price is None or price <= 0:
+            continue
+
+        average_cost = _to_float(holding.get("averageCost"))
+        total_holding = _to_float(holding.get("totalHolding"))
+
+        cost_value = average_cost * total_holding
+        market_value = price * total_holding
+        total_pnl += market_value - cost_value
+
+    return total_pnl
+
+
 def _build_aum_document(
     client: Dict[str, Any],
     total_holdings: float,
     total_cash: float,
     rate: float,
     target_date: date,
+    total_pnl: float = 0.0,
 ) -> Dict[str, Any]:
     total_aum = total_holdings + total_cash
     collected_fees = round((total_aum * (rate / 100)) / _days_in_year(target_date), 2)
@@ -145,7 +249,7 @@ def _build_aum_document(
         "totalAUM": round(total_aum, 2),
         "feeReportRate": rate,
         "collectedFees": collected_fees,
-        "totalPnl": 0.0,
+        "totalPnl": round(total_pnl, 2),
         "selected": True,
         "generatedAt": generated_at,
     }
@@ -162,7 +266,8 @@ def upsert_aum_documents(db_name: str, documents: List[Dict[str, Any]]) -> None:
 
         inserted = 0
         updated = 0
-        for doc in documents:
+        total = len(documents)
+        for index, doc in enumerate(documents, start=1):
             account_number = doc.get("accountNumber")
             generated_at = doc.get("generatedAt", "")
             date_part = generated_at.split("T")[0] if generated_at else ""
@@ -182,6 +287,12 @@ def upsert_aum_documents(db_name: str, documents: List[Dict[str, Any]]) -> None:
                 inserted += 1
             elif result.modified_count:
                 updated += 1
+
+            if index % 500 == 0 or index == total:
+                print(
+                    f"Upsert progress: {index}/{total} documents processed "
+                    f"({inserted} inserted, {updated} updated so far)."
+                )
 
         print(
             f"Upserted {inserted + updated} AUM document(s) into "
@@ -330,10 +441,30 @@ def main() -> None:
         if account_number:
             portfolios_by_account[str(account_number)] = portfolio
 
+    all_symbols: set = set()
+    for portfolio in portfolios:
+        holdings = portfolio.get("holdings") or []
+        if not isinstance(holdings, list):
+            continue
+        for holding in holdings:
+            if not isinstance(holding, dict):
+                continue
+            security_code = holding.get("securityCode")
+            market_code_yf = holding.get("marketCode_yf")
+            if security_code and market_code_yf:
+                all_symbols.add(f"{security_code}.{market_code_yf}")
+
+    instruments = fetch_instruments(DATABASE_NAME, list(all_symbols))
+    print(f"Fetched {len(instruments)} instrument(s).")
+    price_map = _build_instrument_price_map(instruments)
+    print(f"Built price map for {len(price_map)} instrument(s).")
+
     current = start_date
     aum_documents: List[Dict[str, Any]] = []
+    processed_dates = 0
 
     while current <= end_date:
+        print(f"Processing date: {current.isoformat()}")
         for account_number, client in clients_by_account.items():
             portfolio = portfolios_by_account.get(account_number, {})
             nav_series = _sorted_nav_series(portfolio)
@@ -350,20 +481,62 @@ def main() -> None:
                 if isinstance(bank_account, dict)
             )
 
-            aum_doc = _build_aum_document(client, total_holdings, total_cash, args.rate, current)
+            holdings = portfolio.get("holdings", []) or []
+            total_pnl = _calculate_account_pnl(holdings, price_map, current)
+
+            aum_doc = _build_aum_document(client, total_holdings, total_cash, args.rate, current, total_pnl=total_pnl)
             aum_documents.append(aum_doc)
+
+        processed_dates += 1
+        if processed_dates % 10 == 0 or current == end_date:
+            print(
+                f"Progress: {processed_dates} date(s) processed "
+                f"({current.isoformat()}), {len(aum_documents)} document(s) built so far."
+            )
 
         current += timedelta(days=1)
 
     print(
         f"Built {len(aum_documents)} AUM document(s) for "
-        f"{(end_date - start_date).days + 1} date(s) x {len(clients_by_account)} account(s)."
+        f"{processed_dates} date(s) x {len(clients_by_account)} account(s)."
     )
 
     if aum_documents:
         upsert_aum_documents(DATABASE_NAME, aum_documents)
     else:
         print("No AUM documents built; skipping database upsert.")
+
+    accounts_with_zero_holdings: Dict[str, int] = {}
+    total_docs = len(aum_documents)
+    for idx, doc in enumerate(aum_documents, start=1):
+        account = str(doc.get("accountNumber", ""))
+        if _to_float(doc.get("totalHoldings")) == 0.0:
+            accounts_with_zero_holdings[account] = accounts_with_zero_holdings.get(account, 0) + 1
+
+        if idx % 1000 == 0 or idx == total_docs:
+            print(f"Post-processing: {idx}/{total_docs} documents checked for zero holdings.")
+
+    if accounts_with_zero_holdings:
+        print("\nAccounts with zero totalHoldings for one or more dates:")
+        for account, count in sorted(accounts_with_zero_holdings.items()):
+            print(f"  {account}: {count} date(s)")
+
+    total_pnl_summary = []
+    total_accounts = len(clients_by_account)
+    for idx, (account_number, client) in enumerate(clients_by_account.items(), start=1):
+        portfolio = portfolios_by_account.get(account_number, {})
+        holdings = portfolio.get("holdings", []) or []
+        total_pnl = _calculate_account_pnl(holdings, price_map, end_date)
+        total_pnl_summary.append((account_number, total_pnl))
+
+        if idx % 10 == 0 or idx == total_accounts:
+            print(f"P&L calculation: {idx}/{total_accounts} accounts processed.")
+
+    print("\nTotal P&L per account (based on current holdings/prices):")
+    print(f"{'Account':<15} {'Total P&L':>15}")
+    print("-" * 32)
+    for account_number, total_pnl in sorted(total_pnl_summary):
+        print(f"{account_number:<15} {total_pnl:>15.2f}")
 
     if args.print_report:
         generate_daily_fee_report(DATABASE_NAME, args.rate, end_date)
