@@ -26,6 +26,7 @@ Environment variables required:
 """
 
 import logging
+import math
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -145,15 +146,22 @@ def _to_float(value: Any) -> float:
         value: Value to convert.
 
     Returns:
-        Numeric float value, or ``0.0`` if the value is missing or not numeric.
+        Numeric float value, or ``0.0`` if the value is missing, not numeric,
+        or NaN.
     """
     if value is None:
         return 0.0
     if isinstance(value, (int, float)):
-        return float(value)
+        result = float(value)
+        if isinstance(result, float) and math.isnan(result):
+            return 0.0
+        return result
     if isinstance(value, str):
         try:
-            return float(value)
+            result = float(value)
+            if math.isnan(result):
+                return 0.0
+            return result
         except (TypeError, ValueError):
             return 0.0
     return 0.0
@@ -244,16 +252,98 @@ def _build_symbol(holding: Dict[str, Any]) -> str:
     return ""
 
 
-def _calculate_account_pnl(holdings: List[Dict[str, Any]], instruments: Dict[str, Dict[str, Any]]) -> float:
+def _build_instrument_price_map(instruments: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+    """Build a date-keyed price map from the instruments ``timeseries``.
+
+    Args:
+        instruments: List of instrument documents from the ``instruments``
+            collection.
+
+    Returns:
+        Dictionary mapping each ``symbol`` to a dict of
+        ``{"YYYY-MM-DD": price}`` entries containing only valid numeric
+        prices.
+    """
+    price_map: Dict[str, Dict[str, float]] = {}
+
+    for instrument in instruments:
+        if not isinstance(instrument, dict):
+            continue
+
+        symbol = instrument.get("symbol")
+        if not symbol:
+            continue
+
+        timeseries = instrument.get("timeseries") or []
+        if not isinstance(timeseries, list):
+            continue
+
+        date_prices: Dict[str, float] = {}
+        for entry in timeseries:
+            if not isinstance(entry, dict):
+                continue
+            raw_date = entry.get("date")
+            price = entry.get("price")
+            if raw_date and price is not None:
+                price_value = _to_float(price)
+                if price_value > 0 and not math.isnan(price_value):
+                    date_prices[str(raw_date)] = price_value
+
+        if date_prices:
+            price_map[str(symbol)] = date_prices
+
+    return price_map
+
+
+def _latest_price_on_or_before(
+    date_prices: Dict[str, float],
+    target_date: datetime,
+) -> float:
+    """Return the latest price from ``date_prices`` on or before ``target_date``.
+
+    Args:
+        date_prices: Dictionary mapping ``"YYYY-MM-DD"`` strings to prices.
+        target_date: The cutoff datetime. Only entries with a date on or
+            before this datetime are considered.
+
+    Returns:
+        The latest valid price as a float, or ``0.0`` if no matching entry
+        exists.
+    """
+    target_str = target_date.strftime("%Y-%m-%d")
+    latest_price = 0.0
+
+    sorted_dates = sorted(date_prices.keys())
+    for date_str in sorted_dates:
+        if date_str > target_str:
+            break
+        price = date_prices[date_str]
+        if price > 0 and not math.isnan(price):
+            latest_price = price
+
+    return latest_price
+
+
+def _calculate_account_pnl(
+    holdings: List[Dict[str, Any]],
+    instruments: Dict[str, Dict[str, Any]],
+    price_map: Dict[str, Dict[str, float]],
+    today: datetime,
+) -> float:
     """Calculate the total P&L for an account.
 
-    Uses ``currentPrice`` from the instruments collection as the primary
-    price source.  Falls back to ``marketPrice`` from the portfolio holding
-    document if ``currentPrice`` is missing or invalid.
+    Uses the following price source fallback chain for each holding:
+      1. ``currentPrice`` from the instruments collection.
+      2. Latest valid price from the instruments ``timeseries`` on or before
+         ``today``.
+      3. ``marketPrice`` from the portfolio holding document.
 
     Args:
         holdings: List of holding dicts from the portfolio document.
         instruments: Dictionary mapping symbol strings to instrument documents.
+        price_map: Dictionary mapping symbol strings to date-keyed price maps
+            from the instruments ``timeseries``.
+        today: The current datetime used as the cutoff for timeseries lookups.
 
     Returns:
         Total P&L for the account as a float.
@@ -272,14 +362,23 @@ def _calculate_account_pnl(holdings: List[Dict[str, Any]], instruments: Dict[str
 
         instrument = instruments.get(symbol)
         current_price = _to_float(instrument.get("currentPrice")) if instrument else 0.0
+
+        if current_price <= 0 or math.isnan(current_price):
+            date_prices = price_map.get(symbol)
+            if date_prices:
+                current_price = _latest_price_on_or_before(date_prices, today)
+
         market_price = _to_float(holding.get("marketPrice"))
 
         effective_price = current_price if current_price > 0 else market_price
-        if effective_price <= 0:
+        if effective_price <= 0 or math.isnan(effective_price):
             continue
 
         average_cost = _to_float(holding.get("averageCost"))
         total_holding = _to_float(holding.get("totalHolding"))
+
+        if math.isnan(average_cost) or math.isnan(total_holding):
+            continue
 
         cost_value = average_cost * total_holding
         market_value = effective_price * total_holding
@@ -550,6 +649,9 @@ def main() -> None:
     instruments = _fetch_instruments()
     print(f"Fetched {len(instruments)} instrument(s) from MongoDB '{INSTRUMENTS_COLLECTION}' collection.")
 
+    price_map = _build_instrument_price_map(instruments)
+    print(f"Built price map for {len(price_map)} instrument(s) with valid timeseries prices.")
+
     seen_account_numbers = set()
     skipped_missing_account = 0
     aum_documents: List[Dict[str, Any]] = []
@@ -575,7 +677,7 @@ def main() -> None:
         aum_doc = _build_aum_document(client, portfolio, total_holdings=total_holdings)
 
         holdings = portfolio.get("holdings", []) or []
-        total_pnl = _calculate_account_pnl(holdings, instruments)
+        total_pnl = _calculate_account_pnl(holdings, instruments, price_map, now)
         aum_doc["totalPnl"] = round(total_pnl, 2)
 
         aum_documents.append(aum_doc)

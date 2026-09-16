@@ -20,6 +20,7 @@ Environment variables required:
 
 import argparse
 import logging
+import math
 import os
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -50,7 +51,10 @@ def get_mongo_client() -> MongoClient:
 
 def _to_float(value: Any) -> float:
     try:
-        return float(value)
+        result = float(value)
+        if isinstance(result, float) and math.isnan(result):
+            return 0.0
+        return result
     except (TypeError, ValueError):
         return 0.0
 
@@ -184,7 +188,7 @@ def _latest_price_on_or_before(
         if date_str > target_str:
             break
         price = date_prices[date_str]
-        if price > 0:
+        if price > 0 and not math.isnan(price):
             latest_price = price
 
     return latest_price
@@ -217,6 +221,9 @@ def _calculate_account_pnl(
 
         average_cost = _to_float(holding.get("averageCost"))
         total_holding = _to_float(holding.get("totalHolding"))
+
+        if math.isnan(average_cost) or math.isnan(total_holding):
+            continue
 
         cost_value = average_cost * total_holding
         market_value = price * total_holding
