@@ -12,6 +12,7 @@ SCRIPTS = [
     "batch/get_instruments_timeseries.py",
     "batch/get_portfolios_nav.py",
     "data/005_get_data_for_fees_reporting.py",
+    "data/006_get_risk_metrics.py",
 ]
 
 # Resolve the project root so child scripts run with the expected working directory.
