@@ -6,7 +6,7 @@ collection to reconstruct ``totalHoldings`` for that date.  Current cash is
 combined with those holdings to compute ``totalAUM``, ``collectedFees``, and
 a generated ``fees`` collection document keyed by ``accountNumber`` and date.
 
-Usage::
+Usage:
 
     python scripts/get_past_fees_recalc.py
     python scripts/get_past_fees_recalc.py --start-date 2026-08-01 --end-date 2026-09-15
@@ -252,6 +252,7 @@ def _build_aum_document(
     return {
         "accountNumber": str(client.get("accountNumber", "")),
         "accountName": client.get("accountName", ""),
+        "client_category": client.get("client_category", ""),
         "totalHoldings": round(total_holdings, 2),
         "totalCash": round(total_cash, 2),
         "totalAUM": round(total_aum, 2),
@@ -346,6 +347,7 @@ def generate_daily_fee_report(db_name: str, rate: float, report_date: date) -> N
         rows.append({
             "Account": str(doc.get("accountNumber", "")),
             "AccountName": doc.get("accountName", ""),
+            "ClientCategory": doc.get("client_category", ""),
             "Date": date_prefix,
             "Holdings": f"{_to_float(doc.get('totalHoldings')):.2f}",
             "Cash": f"{_to_float(doc.get('totalCash')):.2f}",
@@ -361,19 +363,19 @@ def generate_daily_fee_report(db_name: str, rate: float, report_date: date) -> N
     print(
         f"\nDaily Fee Report (Rate: {rate}%/annum, Date: {date_prefix})"
     )
-    print("-" * 165)
+    print("-" * 185)
     print(
-        f"{'Account':<15} {'AccountName':<25} {'Date':<12} {'Holdings':<15} "
+        f"{'Account':<15} {'AccountName':<25} {'ClientCategory':<20} {'Date':<12} {'Holdings':<15} "
         f"{'Cash':<15} {'AUM':<15} {'Rate':<8} {'Fee':<15} {'P&L':<15} {'Selected':<10}"
     )
-    print("-" * 165)
+    print("-" * 185)
     for row in rows:
         print(
-            f"{row['Account']:<15} {row['AccountName']:<25} {row['Date']:<12} "
+            f"{row['Account']:<15} {row['AccountName']:<25} {row['ClientCategory']:<20} {row['Date']:<12} "
             f"{row['Holdings']:<15} {row['Cash']:<15} {row['AUM']:<15} "
             f"{row['Rate']:<8} {row['Fee']:<15} {row['P&L']:<15} {row['Selected']:<10}"
         )
-    print("-" * 165)
+    print("-" * 185)
     print(f"Total accounts: {len(rows)}\n")
 
 

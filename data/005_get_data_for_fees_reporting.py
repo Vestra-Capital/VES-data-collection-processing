@@ -423,6 +423,7 @@ def _build_aum_document(
     return {
         "accountNumber": account_number,
         "accountName": client.get("accountName", ""),
+        "client_category": client.get("client_category", ""),
         "totalHoldings": round(total_holdings, 2),
         "totalCash": round(total_cash, 2),
         "totalAUM": round(total_aum, 2),
@@ -611,6 +612,7 @@ def generate_daily_fee_report(rate: float = FEES_REPORT_RATE) -> None:
         rows.append({
             "Account": str(doc.get("accountNumber", "")),
             "AccountName": doc.get("accountName", ""),
+            "ClientCategory": doc.get("client_category", ""),
             "Date": date_str,
             "Holdings": f"{_to_float(doc.get('totalHoldings')):.2f}",
             "Cash": f"{_to_float(doc.get('totalCash')):.2f}",
@@ -624,12 +626,12 @@ def generate_daily_fee_report(rate: float = FEES_REPORT_RATE) -> None:
     rows.sort(key=lambda x: x["Account"])
 
     print(f"\nDaily Fee Report (Rate: {rate}%/annum, Date: {date_str})")
-    print("-" * 165)
-    print(f"{'Account':<15} {'AccountName':<25} {'Date':<12} {'Holdings':<15} {'Cash':<15} {'AUM':<15} {'Rate':<8} {'Fee':<15} {'P&L':<15} {'Selected':<10}")
-    print("-" * 165)
+    print("-" * 185)
+    print(f"{'Account':<15} {'AccountName':<25} {'ClientCategory':<20} {'Date':<12} {'Holdings':<15} {'Cash':<15} {'AUM':<15} {'Rate':<8} {'Fee':<15} {'P&L':<15} {'Selected':<10}")
+    print("-" * 185)
     for row in rows:
-        print(f"{row['Account']:<15} {row['AccountName']:<25} {row['Date']:<12} {row['Holdings']:<15} {row['Cash']:<15} {row['AUM']:<15} {row['Rate']:<8} {row['Fee']:<15} {row['P&L']:<15} {row['Selected']:<10}")
-    print("-" * 165)
+        print(f"{row['Account']:<15} {row['AccountName']:<25} {row['ClientCategory']:<20} {row['Date']:<12} {row['Holdings']:<15} {row['Cash']:<15} {row['AUM']:<15} {row['Rate']:<8} {row['Fee']:<15} {row['P&L']:<15} {row['Selected']:<10}")
+    print("-" * 185)
     print(f"Total accounts: {len(rows)}\n")
 
 
