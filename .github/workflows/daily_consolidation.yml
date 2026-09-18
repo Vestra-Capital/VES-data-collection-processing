@@ -1,4 +1,4 @@
-name: Daily Consolidation
+name: Fees Reporting
 
 on:
   schedule:

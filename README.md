@@ -98,7 +98,7 @@ graph TB
         RISK["006_get_risk_score.py<br/>calculate_risk_score()"]
         RISK_PERSIST["Persistence Layer<br/>update_portfolio_metrics()"]
         BATCH_COLLECT["batch/data_collection.py<br/>main()"]
-        BATCH_FEES["batch/fees_reporting.py<br/>main()"]
+        BATCH_FEES["batch/daily_consolidation.py<br/>main()"]
         PRICE_STREAMER["batch/price_streamer.py<br/>main()"]
     end
 
@@ -214,7 +214,7 @@ graph TD
     PROSPECTS --> PYTHON_MONGO
     PROSPECTS --> EMAIL
     BATCH_COLLECT["batch/data_collection.py<br/>(__main__)"] --> SUBPROCESS["subprocess"]
-    BATCH_FEES["batch/fees_reporting.py<br/>(__main__)"] --> SUBPROCESS
+    BATCH_FEES["batch/daily_consolidation.py<br/>(__main__)"] --> SUBPROCESS
     GET_INSTRUMENTS["batch/get_instruments.py<br/>(__main__)"] --> DOTENV
     GET_INSTRUMENTS --> PYTHON_MONGO
     GET_INSTRUMENTS --> MARKET["market provider"]
@@ -499,7 +499,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Script as batch/fees_reporting.py
+    participant Script as batch/daily_consolidation.py
     participant S1 as 001_get_trading_account.py
     participant S2 as 002_get_portfolio_holdings.py
     participant S3 as 003_get_cash_balances.py
@@ -799,7 +799,7 @@ python batch/data_collection.py
 
 ---
 
-### `batch/fees_reporting.py`
+### `batch/daily_consolidation.py`
 
 **Purpose:** Orchestrate the fees reporting pipeline by running data collection, instrument enrichment, NAV calculation, and AUM generation scripts sequentially.
 
@@ -823,7 +823,7 @@ python batch/data_collection.py
 **Usage:**
 
 ```bash
-python batch/fees_reporting.py
+python batch/daily_consolidation.py
 ```
 
 ---
@@ -1342,7 +1342,7 @@ python batch/data_collection.py
 ### 12. Run Batch Fees Reporting
 
 ```bash
-python batch/fees_reporting.py
+python batch/daily_consolidation.py
 ```
 
 **What happens:**
@@ -1464,7 +1464,7 @@ The pipeline uses explicit error handling with rich diagnostic context:
 | Generate fees reporting data | `python data/005_get_data_for_fees_reporting.py` | Console output with AUM records and fee report |
 | Calculate risk scores | `python data/006_get_risk_score.py` | Console output with riskScore, riskLabel, and drawdown metrics for each portfolio |
 | Run batch data collection | `python batch/data_collection.py` | Sequential execution of data collection scripts |
-| Run batch fees reporting | `python batch/fees_reporting.py` | Sequential execution of full fees reporting pipeline |
+| Run batch fees reporting | `python batch/daily_consolidation.py` | Sequential execution of full fees reporting pipeline |
 | Start price streamer | `python batch/price_streamer.py` | Continuous price polling until interrupted |
 | Send pending prospects report | `python scripts/send_pending_prospects_email.py` | Email delivered with HTML table of pending prospects |
 | Send test email | `python test/test_send_email.py` | Email delivered to test recipient |
