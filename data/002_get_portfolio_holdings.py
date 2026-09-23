@@ -304,7 +304,7 @@ def upsert_portfolios(documents: List[Dict[str, Any]], active_account_numbers: s
                 filter_query["accountNumber"] = account_number
 
             if filter_query:
-                collection.replace_one(filter_query, doc, upsert=True)
+                collection.update_one(filter_query, {"$set": doc}, upsert=True)
             else:
                 collection.insert_one(doc)
             upserted += 1
