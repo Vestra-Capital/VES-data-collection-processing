@@ -1118,6 +1118,11 @@ BREVO_API_KEY=xkeysib-...
 BREVO_EMAIL_SENDER=team@vestracapital.com.au
 
 # ===========================================
+# Portfolio / Risk Metrics Updater (daemon)
+# ===========================================
+UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS=300
+
+# ===========================================
 # Pending Prospects Email (optional)
 # ===========================================
 NOTIFICATION_EMAIL=daiviet@vestracapital.com.au
@@ -1134,6 +1139,7 @@ COLLECTION_NAME=prospects
 | `DATABASE_NAME` | No | `VESTRA_PROD` | Target MongoDB database name. |
 | `MARKET_DATA_PROVIDER` | No | `market.yfinance_provider.YFinanceProvider` | Dotted import path for the market data provider class. |
 | `PRICE_POLL_INTERVAL_SECONDS` | No | `60` | Seconds between price polls for `batch/price_streamer.py`. Minimum is 10. |
+| `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` | No | `300` | Seconds between polling cycles for `batch/update_portfolios_and_risk_metrics.py`. Minimum is 60. |
 | `FEES_REPORT_RATE` | No | `1.5` | Annual fee rate as a percentage for fees reporting. |
 | `COLLECTION_NAME` | No | `prospects` | Target MongoDB collection name for the pending-prospects script. |
 | `BREVO_API_KEY` | **Yes** | — | Brevo API key for transactional email. |
@@ -1367,6 +1373,28 @@ python batch/price_streamer.py
 **Environment variables:**
 - `PRICE_POLL_INTERVAL_SECONDS` — Seconds between price polls (defaults to `60`, minimum `10`).
 
+### 14. Start Portfolio / Risk Updater Daemon
+
+```bash
+python batch/update_portfolios_and_risk_metrics.py
+```
+
+**What happens:**
+
+- Runs as a long-lived daemon that polls the `portfolios` collection indefinitely.
+- Each cycle finds portfolios missing `nav_timeseries` or risk metrics.
+- Before calculating NAV, verifies that all instruments referenced by portfolio holdings exist in the `instruments` collection with metadata and historical `timeseries`.
+- If instruments are missing, enriches them via the configured market data provider and upserts them.
+- If `timeseries` is missing, fetches 12-month historical price data and upserts it.
+- Calculates NAV timeseries from holdings and instrument prices.
+- Calculates `riskScore`, `riskLabel`, and drawdown metrics.
+- Upserts results back to MongoDB.
+- Sleeps for the configured poll interval before the next cycle.
+- Runs until interrupted (Ctrl+C).
+
+**Environment variables:**
+- `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` — Seconds between polling cycles (defaults to `300`, minimum `60`).
+
 ---
 
 ### 14. Send a Test Email
@@ -1541,6 +1569,8 @@ Or use a workflow orchestrator such as:
 - **Prefect** — for modern Python-native orchestration.
 - **GitHub Actions** — for scheduled CI runs.
 
+Alternatively, run `batch/update_portfolios_and_risk_metrics.py` as a long-lived daemon on a host or container. It polls indefinitely on the interval configured by `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` (default: 300 seconds).
+
 ---
 
 ## CI/CD
@@ -1564,6 +1594,8 @@ The repository includes two GitHub Actions workflows for automated execution of 
 | Python setup | `actions/setup-python@v5` with Python 3.12 |
 | Install dependencies | `pip install -r requirements.txt` |
 | Run script | `python batch/update_portfolios_and_risk_metrics.py` |
+
+> **Note:** This script now runs as a long-lived daemon that polls indefinitely. In GitHub Actions, the job will continue running until the workflow is cancelled or the runner times out. For production daemon deployment, run it directly on a host or container rather than via scheduled CI.
 
 **Required secrets:**
 - `MONGODB_SRV`
@@ -1596,7 +1628,7 @@ The repository includes two GitHub Actions workflows for automated execution of 
 
 | Workflow | Trigger | Frequency | Script Executed |
 |----------|---------|-----------|-----------------|
-| `update_portfolios_and_risk_metrics.yml` | Push + Schedule + Manual | Every 4 hours + on push to `main` | `batch/update_portfolios_and_risk_metrics.py` |
+| `update_portfolios_and_risk_metrics.yml` | Push + Schedule + Manual | Every 4 hours + on push to `main` | `batch/update_portfolios_and_risk_metrics.py` (long-lived daemon) |
 | `daily_consolidation.yml` | Schedule + Manual | Daily at 9 AM UTC | `batch/daily_consolidation.py` |
 
 ## License
