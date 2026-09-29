@@ -19,6 +19,7 @@ A production-grade Python pipeline that retrieves trading account data from the 
 9. [Troubleshooting](#troubleshooting)
 10. [Testing](#testing)
 11. [Deployment Considerations](#deployment-considerations)
+12. [CI/CD](#cicd)
 
 ---
 
@@ -1541,6 +1542,62 @@ Or use a workflow orchestrator such as:
 - **GitHub Actions** — for scheduled CI runs.
 
 ---
+
+## CI/CD
+
+### GitHub Actions Workflows
+
+The repository includes two GitHub Actions workflows for automated execution of pipeline jobs.
+
+#### `update_portfolios_and_risk_metrics.yml`
+
+**Triggers:**
+- **Push to `main`** — runs automatically on every push to the `main` branch.
+- **Schedule** — runs every 4 hours (`0 */4 * * *`).
+- **Manual dispatch** — can be triggered from the GitHub Actions UI via `workflow_dispatch`.
+
+**Job: `backfill`**
+
+| Step | Action |
+|------|--------|
+| Checkout | `actions/checkout@v4` |
+| Python setup | `actions/setup-python@v5` with Python 3.12 |
+| Install dependencies | `pip install -r requirements.txt` |
+| Run script | `python batch/update_portfolios_and_risk_metrics.py` |
+
+**Required secrets:**
+- `MONGODB_SRV`
+- `DATABASE_NAME`
+- `MORRISON_ACCESS_KEY`
+- `MORRISON_API_BASE_URL`
+
+#### `daily_consolidation.yml`
+
+**Triggers:**
+- **Schedule** — runs daily at 9 AM UTC (`0 9 * * *`).
+- **Manual dispatch** — can be triggered from the GitHub Actions UI via `workflow_dispatch`.
+
+**Job: `collect-data`**
+
+| Step | Action |
+|------|--------|
+| Checkout | `actions/checkout@v4` |
+| Python setup | `actions/setup-python@v5` with Python 3.12 |
+| Install dependencies | `pip install -r requirements.txt` |
+| Run script | `python batch/daily_consolidation.py` |
+
+**Required secrets:**
+- `MONGODB_SRV`
+- `DATABASE_NAME`
+- `MORRISON_ACCESS_KEY`
+- `MORRISON_API_BASE_URL`
+
+### Workflow Comparison
+
+| Workflow | Trigger | Frequency | Script Executed |
+|----------|---------|-----------|-----------------|
+| `update_portfolios_and_risk_metrics.yml` | Push + Schedule + Manual | Every 4 hours + on push to `main` | `batch/update_portfolios_and_risk_metrics.py` |
+| `daily_consolidation.yml` | Schedule + Manual | Daily at 9 AM UTC | `batch/daily_consolidation.py` |
 
 ## License
 
