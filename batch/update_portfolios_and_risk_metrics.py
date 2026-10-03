@@ -77,7 +77,9 @@ from batch.get_instruments import (
 from batch.get_instruments_timeseries import _upsert_instrument_timeseries as _upsert_instrument_timeseries_ts
 from batch.get_portfolios_nav import (
     _build_instrument_price_map,
+    _build_instrument_map,
     _calculate_nav_timeseries,
+    _calculate_portfolio_values,
     _smooth_price_map,
     _update_portfolio_nav,
     fetch_instruments,
@@ -268,6 +270,7 @@ def run_once(db_name: str) -> None:
         instruments = fetch_instruments(db_name, list(all_symbols))
         logger.info("Fetched %d instrument(s).", len(instruments))
         price_map = _smooth_price_map(_build_instrument_price_map(instruments))
+        instrument_map = _build_instrument_map(instruments)
         sector_map = _build_symbol_sector_map(instruments)
 
     updated_nav = 0
@@ -279,7 +282,8 @@ def run_once(db_name: str) -> None:
         try:
             nav_timeseries = _calculate_nav_timeseries(holdings, price_map)
             if nav_timeseries:
-                _update_portfolio_nav(db_name, portfolio, nav_timeseries)
+                portfolio_values = _calculate_portfolio_values(holdings, instrument_map)
+                _update_portfolio_nav(db_name, portfolio, nav_timeseries, portfolio_values)
                 logger.info(
                     "Updated NAV for accountNumber=%s: %d date(s).",
                     account_number,

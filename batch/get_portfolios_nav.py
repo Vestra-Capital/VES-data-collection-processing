@@ -153,10 +153,49 @@ def _calculate_nav_timeseries(
     return nav_timeseries
 
 
+def _build_instrument_map(instruments: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    instrument_map: Dict[str, Dict[str, Any]] = {}
+    for instrument in instruments:
+        symbol = instrument.get("symbol")
+        if symbol:
+            instrument_map[symbol] = instrument
+    return instrument_map
+
+
+def _calculate_portfolio_values(
+    holdings: List[Dict[str, Any]],
+    instrument_map: Dict[str, Dict[str, Any]],
+) -> Dict[str, float]:
+    market_value = 0.0
+    cost_value = 0.0
+    for holding in holdings:
+        if not isinstance(holding, dict):
+            continue
+        security_code = holding.get("securityCode")
+        market_code_yf = holding.get("marketCode_yf")
+        total_holding = _to_float(holding.get("totalHolding"))
+        average_cost = _to_float(holding.get("averageCost"))
+        if not security_code or not market_code_yf or total_holding <= 0:
+            continue
+        symbol = f"{security_code}.{market_code_yf}"
+        instrument = instrument_map.get(symbol)
+        current_price = _to_float(instrument.get("currentPrice")) if instrument else 0.0
+        if current_price > 0:
+            market_value += total_holding * current_price
+        if average_cost > 0:
+            cost_value += total_holding * average_cost
+    return {
+        "marketValue": round(market_value, 10),
+        "costValue": round(cost_value, 10),
+        "costValue_AUD": round(cost_value, 10),
+    }
+
+
 def _update_portfolio_nav(
     db_name: str,
     portfolio: Dict[str, Any],
     nav_timeseries: List[Dict[str, float]],
+    portfolio_values: Dict[str, float],
 ) -> None:
     client = get_mongo_client()
     try:
@@ -167,7 +206,7 @@ def _update_portfolio_nav(
             return
         collection.update_one(
             {"accountNumber": account_number},
-            {"$set": {"nav_timeseries": nav_timeseries}},
+            {"$set": {"nav_timeseries": nav_timeseries, **portfolio_values}},
         )
     except PyMongoError as e:
         raise RuntimeError(f"Failed to update portfolio NAV for accountNumber={account_number}: {e}") from e
@@ -220,6 +259,7 @@ def main() -> None:
     price_map = _build_instrument_price_map(instruments)
     print(f"Built price map for {len(price_map)} instrument(s).")
 
+    instrument_map = _build_instrument_map(instruments)
     smoothed_price_map = _smooth_price_map(price_map)
     print(f"Smoothed price map for {len(smoothed_price_map)} instrument(s).")
 
@@ -230,7 +270,8 @@ def main() -> None:
         account_number = portfolio.get("accountNumber", "N/A")
         try:
             nav_timeseries = _calculate_nav_timeseries(holdings, smoothed_price_map)
-            _update_portfolio_nav(db_name, portfolio, nav_timeseries)
+            portfolio_values = _calculate_portfolio_values(holdings, instrument_map)
+            _update_portfolio_nav(db_name, portfolio, nav_timeseries, portfolio_values)
             print(f"Updated NAV for accountNumber={account_number}: {len(nav_timeseries)} date(s).")
             updated += 1
         except RuntimeError as e:
