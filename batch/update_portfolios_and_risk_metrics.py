@@ -254,6 +254,9 @@ def run_once(db_name: str) -> None:
 
     logger.info("Found %d unique instrument symbol(s).", len(all_symbols))
 
+    price_map: Dict[str, Dict[str, float]] = {}
+    sector_map: Dict[str, str] = {}
+
     if all_symbols:
         _ensure_instruments_and_timeseries(db_name, list(all_symbols), portfolio_data)
 
