@@ -166,7 +166,6 @@ def _calculate_portfolio_values(
     holdings: List[Dict[str, Any]],
     instrument_map: Dict[str, Dict[str, Any]],
 ) -> Dict[str, float]:
-    market_value = 0.0
     cost_value = 0.0
     for holding in holdings:
         if not isinstance(holding, dict):
@@ -177,15 +176,9 @@ def _calculate_portfolio_values(
         average_cost = _to_float(holding.get("averageCost"))
         if not security_code or not market_code_yf or total_holding <= 0:
             continue
-        symbol = f"{security_code}.{market_code_yf}"
-        instrument = instrument_map.get(symbol)
-        current_price = _to_float(instrument.get("currentPrice")) if instrument else 0.0
-        if current_price > 0:
-            market_value += total_holding * current_price
         if average_cost > 0:
             cost_value += total_holding * average_cost
     return {
-        "marketValue": round(market_value, 10),
         "costValue": round(cost_value, 10),
         "costValue_AUD": round(cost_value, 10),
     }
