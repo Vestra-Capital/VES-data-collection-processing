@@ -66,6 +66,59 @@ def fetch_instruments(db_name: str, symbols: List[str]) -> List[Dict[str, Any]]:
         client.close()
 
 
+def fetch_portfolios_with_client_exclusion(
+    db_name: str,
+    excluded_categories: List[str],
+) -> List[Dict[str, Any]]:
+    client = get_mongo_client()
+    try:
+        db = client[db_name]
+        clients_collection = db["clients"]
+        cursor = clients_collection.find(
+            {"$nor": [{"client_category": cat} for cat in excluded_categories]},
+            {"accountNumber": 1, "_id": 0},
+        )
+        allowed_account_numbers = {
+            str(doc.get("accountNumber", ""))
+            for doc in cursor
+            if isinstance(doc, dict) and doc.get("accountNumber") is not None
+        }
+
+        collection = db["portfolios"]
+        cursor = collection.find(
+            {"accountNumber": {"$in": list(allowed_account_numbers)}}
+        )
+        return [doc for doc in cursor if isinstance(doc, dict)]
+    except PyMongoError as e:
+        raise RuntimeError(f"Failed to fetch portfolios from MongoDB: {e}") from e
+    finally:
+        client.close()
+
+
+def _update_holdings_market_values(
+    db_name: str,
+    account_number: str,
+    holdings: List[Dict[str, Any]],
+    instrument_map: Dict[str, Dict[str, Any]],
+    latest_price_map: Dict[str, float],
+) -> None:
+    enriched_holdings = _enrich_holdings(holdings, instrument_map, latest_price_map)
+    client = get_mongo_client()
+    try:
+        db = client[db_name]
+        collection = db["portfolios"]
+        collection.update_one(
+            {"accountNumber": account_number},
+            {"$set": {"holdings": enriched_holdings}},
+        )
+    except PyMongoError as e:
+        raise RuntimeError(
+            f"Failed to update holdings market values for accountNumber={account_number}: {e}"
+        ) from e
+    finally:
+        client.close()
+
+
 def _to_float(value: Any) -> float:
     try:
         return float(value)
@@ -122,6 +175,49 @@ def _smooth_price_map(
             smoothed[symbol] = filled
 
     return smoothed
+
+
+def _get_latest_price_map(
+    smoothed_price_map: Dict[str, Dict[str, float]],
+) -> Dict[str, float]:
+    latest_price_map: Dict[str, float] = {}
+    for symbol, date_prices in smoothed_price_map.items():
+        if date_prices:
+            latest_price_map[symbol] = max(date_prices.values())
+    return latest_price_map
+
+
+def _enrich_holdings(
+    holdings: List[Dict[str, Any]],
+    instrument_map: Dict[str, Dict[str, Any]],
+    latest_price_map: Dict[str, float],
+) -> List[Dict[str, Any]]:
+    enriched: List[Dict[str, Any]] = []
+    for holding in holdings:
+        if not isinstance(holding, dict):
+            enriched.append(holding)
+            continue
+
+        h = dict(holding)
+        total_holding = _to_float(h.get("totalHolding"))
+        average_cost = _to_float(h.get("averageCost"))
+        security_code = h.get("securityCode")
+        market_code_yf = h.get("marketCode_yf")
+
+        cost_value = total_holding * average_cost if total_holding > 0 and average_cost > 0 else 0.0
+
+        market_value = 0.0
+        if security_code and market_code_yf and total_holding > 0:
+            symbol = f"{security_code}.{market_code_yf}"
+            market_value = total_holding * latest_price_map.get(symbol, 0.0)
+
+        h["costValue"] = round(cost_value, 2)
+        h["costValue_AUD"] = round(cost_value, 2)
+        h["marketValue"] = round(market_value, 2)
+        h["marketValue_AUD"] = round(market_value, 2)
+        enriched.append(h)
+
+    return enriched
 
 
 def _calculate_nav_timeseries(
@@ -189,6 +285,7 @@ def _update_portfolio_nav(
     portfolio: Dict[str, Any],
     nav_timeseries: List[Dict[str, float]],
     portfolio_values: Dict[str, float],
+    enriched_holdings: List[Dict[str, Any]],
 ) -> None:
     client = get_mongo_client()
     try:
@@ -199,7 +296,7 @@ def _update_portfolio_nav(
             return
         collection.update_one(
             {"accountNumber": account_number},
-            {"$set": {"nav_timeseries": nav_timeseries, **portfolio_values}},
+            {"$set": {"nav_timeseries": nav_timeseries, "holdings": enriched_holdings, **portfolio_values}},
         )
     except PyMongoError as e:
         raise RuntimeError(f"Failed to update portfolio NAV for accountNumber={account_number}: {e}") from e
@@ -264,7 +361,9 @@ def main() -> None:
         try:
             nav_timeseries = _calculate_nav_timeseries(holdings, smoothed_price_map)
             portfolio_values = _calculate_portfolio_values(holdings, instrument_map)
-            _update_portfolio_nav(db_name, portfolio, nav_timeseries, portfolio_values)
+            latest_price_map = _get_latest_price_map(smoothed_price_map)
+            enriched_holdings = _enrich_holdings(holdings, instrument_map, latest_price_map)
+            _update_portfolio_nav(db_name, portfolio, nav_timeseries, portfolio_values, enriched_holdings)
             print(f"Updated NAV for accountNumber={account_number}: {len(nav_timeseries)} date(s).")
             updated += 1
         except RuntimeError as e:

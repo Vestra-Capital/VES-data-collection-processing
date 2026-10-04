@@ -33,7 +33,9 @@ import os
 import sys
 import time
 from collections import OrderedDict
+from datetime import date, datetime
 from typing import Any, Dict, List
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -46,6 +48,42 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 logger = logging.getLogger(__name__)
 
+SYDNEY_TZ = ZoneInfo("Australia/Sydney")
+MARKET_VALUE_UPDATE_HOUR = 17
+_last_market_value_update_date: date | None = None
+
+
+def _get_market_value_update_state_collection(db_name: str):
+    client = get_mongo_client()
+    try:
+        db = client[db_name]
+        return db["batch_state"]
+    except PyMongoError as e:
+        raise RuntimeError(f"Failed to access batch_state collection: {e}") from e
+
+
+def _load_last_market_value_update_date(db_name: str) -> date | None:
+    collection = _get_market_value_update_state_collection(db_name)
+    doc = collection.find_one({"_id": "last_market_value_update"})
+    if not doc:
+        return None
+    raw = doc.get("date")
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _save_market_value_update_date(db_name: str, update_date: date) -> None:
+    collection = _get_market_value_update_state_collection(db_name)
+    collection.update_one(
+        {"_id": "last_market_value_update"},
+        {"$set": {"date": update_date.isoformat()}},
+        upsert=True,
+    )
+
 
 def get_mongo_client() -> MongoClient:
     mongo_srv = os.getenv("MONGODB_SRV")
@@ -54,13 +92,121 @@ def get_mongo_client() -> MongoClient:
     return MongoClient(mongo_srv)
 
 
+def _get_excluded_categories() -> List[str]:
+    raw = os.getenv("EXCLUDED_CLIENT_CATEGORIES", "Wealth Management,Brokerage, Inactive")
+    return [cat.strip() for cat in raw.split(",") if cat.strip()]
+
+
+def _should_run_market_value_update(db_name: str) -> bool:
+    global _last_market_value_update_date
+    now_sydney = datetime.now(SYDNEY_TZ)
+    today = now_sydney.date()
+
+    if _last_market_value_update_date is None:
+        _last_market_value_update_date = _load_last_market_value_update_date(db_name)
+
+    if _last_market_value_update_date == today:
+        return False
+
+    return now_sydney.hour >= MARKET_VALUE_UPDATE_HOUR
+
+
+def _run_daily_market_value_update(db_name: str, excluded_categories: List[str]) -> None:
+    from batch.get_portfolios_nav import (
+        _build_instrument_map,
+        _build_instrument_price_map,
+        _enrich_holdings,
+        _get_latest_price_map,
+        _smooth_price_map,
+        _update_holdings_market_values,
+        fetch_instruments,
+        fetch_portfolios_with_client_exclusion,
+    )
+
+    portfolios = fetch_portfolios_with_client_exclusion(db_name, excluded_categories)
+    if not portfolios:
+        logger.info("No portfolios found for daily market value update.")
+        return
+
+    all_symbols: set = set()
+    portfolio_data: List[tuple] = []
+
+    for portfolio in portfolios:
+        holdings = portfolio.get("holdings") or []
+        if not isinstance(holdings, list):
+            portfolio_data.append((portfolio, []))
+            continue
+
+        symbols = _extract_symbols_from_holdings(holdings)
+        all_symbols.update(symbols)
+        portfolio_data.append((portfolio, holdings))
+
+    if not all_symbols:
+        logger.info("No symbols found for daily market value update.")
+        return
+
+    _ensure_instruments_and_timeseries(db_name, list(all_symbols), portfolio_data)
+
+    instruments = fetch_instruments(db_name, list(all_symbols))
+    price_map = _smooth_price_map(_build_instrument_price_map(instruments))
+    instrument_map = _build_instrument_map(instruments)
+    latest_price_map = _get_latest_price_map(price_map)
+
+    updated = 0
+    failed: List[str] = []
+
+    for portfolio, holdings in portfolio_data:
+        account_number = portfolio.get("accountNumber", "N/A")
+        if not account_number:
+            continue
+        try:
+            _update_holdings_market_values(
+                db_name, account_number, holdings, instrument_map, latest_price_map
+            )
+            logger.info("Daily market value update for accountNumber=%s.", account_number)
+            updated += 1
+        except RuntimeError as e:
+            logger.error(
+                "Daily market value update failed for accountNumber=%s: %s",
+                account_number,
+                e,
+            )
+            failed.append(str(account_number))
+
+    logger.info(
+        "Daily market value update summary: %d updated, %d failed: %s",
+        updated,
+        len(failed),
+        failed,
+    )
+
+
 def fetch_portfolios_missing_nav(db_name: str) -> List[Dict[str, Any]]:
     client = get_mongo_client()
     try:
         db = client[db_name]
+        excluded_categories = _get_excluded_categories()
+
+        clients_collection = db["clients"]
+        cursor = clients_collection.find(
+            {"$nor": [{"client_category": cat} for cat in excluded_categories]},
+            {"accountNumber": 1, "_id": 0},
+        )
+        allowed_account_numbers = {
+            str(doc.get("accountNumber", ""))
+            for doc in cursor
+            if isinstance(doc, dict) and doc.get("accountNumber") is not None
+        }
+
         collection = db["portfolios"]
         cursor = collection.find(
-            {"$or": [{"nav_timeseries": {"$exists": False}}, {"nav_timeseries": []}]}
+            {
+                "accountNumber": {"$in": list(allowed_account_numbers)},
+                "$or": [
+                    {"nav_timeseries": {"$exists": False}},
+                    {"nav_timeseries": []},
+                ],
+            }
         )
         return [doc for doc in cursor if isinstance(doc, dict)]
     except PyMongoError as e:
@@ -80,9 +226,13 @@ from batch.get_portfolios_nav import (
     _build_instrument_map,
     _calculate_nav_timeseries,
     _calculate_portfolio_values,
+    _enrich_holdings,
+    _get_latest_price_map,
     _smooth_price_map,
     _update_portfolio_nav,
+    _update_holdings_market_values,
     fetch_instruments,
+    fetch_portfolios_with_client_exclusion,
 )
 
 _risk_module = importlib.import_module("data.006_get_risk_score")
@@ -283,7 +433,9 @@ def run_once(db_name: str) -> None:
             nav_timeseries = _calculate_nav_timeseries(holdings, price_map)
             if nav_timeseries:
                 portfolio_values = _calculate_portfolio_values(holdings, instrument_map)
-                _update_portfolio_nav(db_name, portfolio, nav_timeseries, portfolio_values)
+                latest_price_map = _get_latest_price_map(price_map)
+                enriched_holdings = _enrich_holdings(holdings, instrument_map, latest_price_map)
+                _update_portfolio_nav(db_name, portfolio, nav_timeseries, portfolio_values, enriched_holdings)
                 logger.info(
                     "Updated NAV for accountNumber=%s: %d date(s).",
                     account_number,
@@ -311,6 +463,13 @@ def run_once(db_name: str) -> None:
         except RuntimeError as e:
             logger.error("Failed for accountNumber=%s: %s", account_number, e)
             failed.append(str(account_number))
+
+    if _should_run_market_value_update(db_name):
+        excluded_categories = _get_excluded_categories()
+        _run_daily_market_value_update(db_name, excluded_categories)
+        global _last_market_value_update_date
+        _last_market_value_update_date = datetime.now(SYDNEY_TZ).date()
+        _save_market_value_update_date(db_name, _last_market_value_update_date)
 
     logger.info(
         "Cycle summary: %d portfolio(s) NAV updated, %d risk updated, %d failed: %s",
