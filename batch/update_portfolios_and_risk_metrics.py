@@ -93,7 +93,7 @@ def get_mongo_client() -> MongoClient:
 
 
 def _get_excluded_categories() -> List[str]:
-    raw = os.getenv("EXCLUDED_CLIENT_CATEGORIES", "Wealth Management,Brokerage, Inactive")
+    raw = os.getenv("EXCLUDED_CLIENT_CATEGORIES", "Wealth Management, Brokerage, Inactive")
     return [cat.strip() for cat in raw.split(",") if cat.strip()]
 
 
