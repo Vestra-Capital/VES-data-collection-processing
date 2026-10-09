@@ -383,6 +383,13 @@ def get_poll_interval() -> int:
 
 def run_once(db_name: str) -> None:
     """Run one polling cycle: find portfolios missing NAV and update them."""
+    if _should_run_market_value_update(db_name):
+        excluded_categories = _get_excluded_categories()
+        _run_daily_market_value_update(db_name, excluded_categories)
+        global _last_market_value_update_date
+        _last_market_value_update_date = datetime.now(SYDNEY_TZ).date()
+        _save_market_value_update_date(db_name, _last_market_value_update_date)
+
     logger.info("Fetching portfolios missing nav_timeseries from '%s.portfolios'...", db_name)
     portfolios = fetch_portfolios_missing_nav(db_name)
     logger.info("Found %d portfolio(s) missing nav_timeseries.", len(portfolios))
@@ -463,13 +470,6 @@ def run_once(db_name: str) -> None:
         except RuntimeError as e:
             logger.error("Failed for accountNumber=%s: %s", account_number, e)
             failed.append(str(account_number))
-
-    if _should_run_market_value_update(db_name):
-        excluded_categories = _get_excluded_categories()
-        _run_daily_market_value_update(db_name, excluded_categories)
-        global _last_market_value_update_date
-        _last_market_value_update_date = datetime.now(SYDNEY_TZ).date()
-        _save_market_value_update_date(db_name, _last_market_value_update_date)
 
     logger.info(
         "Cycle summary: %d portfolio(s) NAV updated, %d risk updated, %d failed: %s",
