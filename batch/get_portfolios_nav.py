@@ -9,6 +9,10 @@ each holding's ``totalHolding`` by the instrument's daily price (from the
 The resulting ``nav_timeseries`` list of ``{"date": str, "nav": float}`` dicts
 is stored back onto the portfolio document in MongoDB.
 
+Dates preceding the first date on which every holding has a price are excluded
+from the NAV series, because including them understates the NAV and creates an
+artificial one-day jump once the missing prices appear.
+
 Environment variables:
     MONGODB_SRV — MongoDB connection string.
     DATABASE_NAME — Database name (defaults to ``VESTRA_PROD``).
@@ -224,9 +228,18 @@ def _calculate_nav_timeseries(
     holdings: List[Dict[str, Any]],
     price_map: Dict[str, Dict[str, float]],
 ) -> List[Dict[str, float]]:
-    nav_by_date: Dict[str, float] = {}
+    """Compute the per-date portfolio NAV from holdings and instrument prices.
 
+    Only dates on or after the first date on which *every* contributing
+    holding has a price are included.  Earlier dates would understate the NAV
+    because some holdings have no price data yet, which surfaces as a one-day
+    jump in the series once those prices appear and artificially inflates the
+    volatility used by the risk score.
+    """
+    contributions: List[tuple] = []
     for holding in holdings:
+        if not isinstance(holding, dict):
+            continue
         security_code = holding.get("securityCode")
         market_code_yf = holding.get("marketCode_yf")
         total_holding = _to_float(holding.get("totalHolding"))
@@ -239,7 +252,18 @@ def _calculate_nav_timeseries(
         if not date_prices:
             continue
 
+        contributions.append((total_holding, date_prices))
+
+    if not contributions:
+        return []
+
+    start_date = max(min(date_prices) for _, date_prices in contributions)
+
+    nav_by_date: Dict[str, float] = {}
+    for total_holding, date_prices in contributions:
         for date, price in date_prices.items():
+            if date < start_date:
+                continue
             nav_by_date[date] = nav_by_date.get(date, 0.0) + total_holding * price
 
     nav_timeseries = [

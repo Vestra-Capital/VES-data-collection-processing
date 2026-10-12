@@ -36,6 +36,11 @@ where `n` is the number of available returns.
 
 4. Normalise by dividing by `0.40` (40% annualised volatility maps to `1.0`), then clamp to `[0.0, 1.0]`.
 
+Note: `nav_timeseries` only contains dates from the first date on which every
+holding has a price (see `batch/get_portfolios_nav.py`). Dates before that
+would understate the NAV and create an artificial one-day jump that inflates
+measured volatility.
+
 ### 2. Diversification component (40% weight)
 
 The diversification score measures how well the portfolio is spread across holdings and sectors. A higher score means better diversification.

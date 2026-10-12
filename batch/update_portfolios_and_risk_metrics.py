@@ -1,15 +1,21 @@
-"""Batch script to update NAV timeseries and risk metrics for portfolios missing them.
+"""Batch script to update NAV timeseries and risk metrics for portfolios.
 
-Queries the ``portfolios`` collection for documents where ``nav_timeseries`` is
-missing or empty, then for each:
+Queries the ``portfolios`` collection each cycle for documents where
+``nav_timeseries`` is missing or empty, then for each:
 
 1. Ensures all instruments referenced by portfolio holdings exist in the
    ``instruments`` collection with metadata and historical ``timeseries``.
 2. Calculates ``nav_timeseries`` from ``holdings`` and instrument ``timeseries``.
 3. Stores the computed ``nav_timeseries`` back to the portfolio.
 4. Calculates ``riskScore``, ``riskLabel``, and drawdown metrics from the new
-   ``nav_timeseries`` and ``holdings``.
+   ``nav_timeseries`` and the enriched ``holdings``.
 5. Stores the risk metrics back to the portfolio.
+
+Every cycle it also refreshes the portfolios that already have a
+``nav_timeseries``: the NAV series is recomputed from current instrument
+prices (written only when it changed) and ``riskScore``, ``riskLabel`` and the
+drawdown metrics are recalculated (written only when they changed), so risk
+metrics can never remain frozen at a value computed from stale inputs.
 
 This module is intended to run as a long-lived daemon. It polls the
 ``portfolios`` collection on a configurable interval and updates any documents
@@ -181,11 +187,14 @@ def _run_daily_market_value_update(db_name: str, excluded_categories: List[str])
     )
 
 
-def fetch_portfolios_missing_nav(db_name: str) -> List[Dict[str, Any]]:
+def fetch_portfolios_missing_nav(
+    db_name: str,
+    excluded_categories: List[str],
+) -> List[Dict[str, Any]]:
+    """Fetch portfolios of non-excluded clients that are missing ``nav_timeseries``."""
     client = get_mongo_client()
     try:
         db = client[db_name]
-        excluded_categories = _get_excluded_categories()
 
         clients_collection = db["clients"]
         cursor = clients_collection.find(
@@ -206,6 +215,44 @@ def fetch_portfolios_missing_nav(db_name: str) -> List[Dict[str, Any]]:
                     {"nav_timeseries": {"$exists": False}},
                     {"nav_timeseries": []},
                 ],
+            }
+        )
+        return [doc for doc in cursor if isinstance(doc, dict)]
+    except PyMongoError as e:
+        raise RuntimeError(f"Failed to fetch portfolios from MongoDB: {e}") from e
+    finally:
+        client.close()
+
+
+def fetch_portfolios_with_nav(
+    db_name: str,
+    excluded_categories: List[str],
+) -> List[Dict[str, Any]]:
+    """Fetch portfolios of non-excluded clients that already have ``nav_timeseries``.
+
+    These are the portfolios whose NAV series and risk metrics are refreshed on
+    every polling cycle.
+    """
+    client = get_mongo_client()
+    try:
+        db = client[db_name]
+
+        clients_collection = db["clients"]
+        cursor = clients_collection.find(
+            {"$nor": [{"client_category": cat} for cat in excluded_categories]},
+            {"accountNumber": 1, "_id": 0},
+        )
+        allowed_account_numbers = {
+            str(doc.get("accountNumber", ""))
+            for doc in cursor
+            if isinstance(doc, dict) and doc.get("accountNumber") is not None
+        }
+
+        collection = db["portfolios"]
+        cursor = collection.find(
+            {
+                "accountNumber": {"$in": list(allowed_account_numbers)},
+                "nav_timeseries": {"$exists": True, "$ne": []},
             }
         )
         return [doc for doc in cursor if isinstance(doc, dict)]
@@ -381,8 +428,81 @@ def get_poll_interval() -> int:
         return 30
 
 
+def _holdings_have_market_values(holdings: List[Dict[str, Any]]) -> bool:
+    """Return True when every holding carries a non-zero ``marketValue``."""
+    return bool(holdings) and all(
+        isinstance(holding, dict) and holding.get("marketValue")
+        for holding in holdings
+    )
+
+
+def _update_portfolio_nav_timeseries(
+    db_name: str,
+    account_number: str,
+    nav_timeseries: List[Dict[str, float]],
+) -> None:
+    """Store a refreshed ``nav_timeseries`` without modifying the holdings."""
+    client = get_mongo_client()
+    try:
+        db = client[db_name]
+        db["portfolios"].update_one(
+            {"accountNumber": account_number},
+            {"$set": {"nav_timeseries": nav_timeseries}},
+        )
+    except PyMongoError as e:
+        raise RuntimeError(
+            f"Failed to update nav_timeseries for accountNumber={account_number}: {e}"
+        ) from e
+    finally:
+        client.close()
+
+
+def _update_risk_metrics_if_changed(
+    db_name: str,
+    portfolio: Dict[str, Any],
+    nav_timeseries: List[Dict[str, Any]],
+    holdings: List[Dict[str, Any]],
+    sector_map: Dict[str, str],
+) -> bool:
+    """Recalculate risk metrics and persist them only when they differ.
+
+    ``holdings`` must be the market-value-enriched holdings, otherwise the
+    diversification component cannot be computed from market-value weights.
+
+    Returns:
+        bool: True when new metrics were written to the portfolio.
+    """
+    account_number = portfolio.get("accountNumber", "N/A")
+    risk_score = calculate_risk_score(nav_timeseries, holdings, sector_map)
+    risk_label = get_risk_label(risk_score)
+    drawdown_metrics = calculate_drawdown_metrics(nav_timeseries)
+
+    unchanged = (
+        portfolio.get("riskScore") == risk_score
+        and portfolio.get("riskLabel") == risk_label
+        and portfolio.get("maxDrawdown") == drawdown_metrics["maxDrawdown"]
+        and portfolio.get("maxWeeklyDrawdown") == drawdown_metrics["maxWeeklyDrawdown"]
+        and portfolio.get("maxYearlyDrawdown") == drawdown_metrics["maxYearlyDrawdown"]
+    )
+    if unchanged:
+        return False
+
+    update_portfolio_metrics(db_name, account_number, risk_score, risk_label, drawdown_metrics)
+    logger.info(
+        "Updated risk for accountNumber=%s: riskScore=%s, riskLabel=%s, "
+        "maxDrawdown=%s, maxWeeklyDrawdown=%s, maxYearlyDrawdown=%s",
+        account_number,
+        risk_score,
+        risk_label,
+        drawdown_metrics["maxDrawdown"],
+        drawdown_metrics["maxWeeklyDrawdown"],
+        drawdown_metrics["maxYearlyDrawdown"],
+    )
+    return True
+
+
 def run_once(db_name: str) -> None:
-    """Run one polling cycle: find portfolios missing NAV and update them."""
+    """Run one polling cycle: create missing NAV series and refresh risk metrics."""
     if _should_run_market_value_update(db_name):
         excluded_categories = _get_excluded_categories()
         _run_daily_market_value_update(db_name, excluded_categories)
@@ -390,34 +510,50 @@ def run_once(db_name: str) -> None:
         _last_market_value_update_date = datetime.now(SYDNEY_TZ).date()
         _save_market_value_update_date(db_name, _last_market_value_update_date)
 
-    logger.info("Fetching portfolios missing nav_timeseries from '%s.portfolios'...", db_name)
-    portfolios = fetch_portfolios_missing_nav(db_name)
-    logger.info("Found %d portfolio(s) missing nav_timeseries.", len(portfolios))
+    excluded_categories = _get_excluded_categories()
+    portfolios_missing_nav = fetch_portfolios_missing_nav(db_name, excluded_categories)
+    portfolios_with_nav = fetch_portfolios_with_nav(db_name, excluded_categories)
 
-    if not portfolios:
+    logger.info("Found %d portfolio(s) missing nav_timeseries.", len(portfolios_missing_nav))
+    logger.info("Found %d portfolio(s) to refresh nav/risk metrics.", len(portfolios_with_nav))
+
+    if not portfolios_missing_nav and not portfolios_with_nav:
         logger.info("Nothing to do this cycle.")
         return
 
     all_symbols: set = set()
     portfolio_data: List[tuple] = []
+    missing_nav_symbols: set = set()
 
-    for portfolio in portfolios:
+    for portfolio in [*portfolios_missing_nav, *portfolios_with_nav]:
         holdings = portfolio.get("holdings") or []
         if not isinstance(holdings, list):
-            portfolio_data.append((portfolio, []))
-            continue
+            holdings = []
 
         symbols = _extract_symbols_from_holdings(holdings)
         all_symbols.update(symbols)
+        if not portfolio.get("nav_timeseries"):
+            missing_nav_symbols.update(symbols)
         portfolio_data.append((portfolio, holdings))
 
     logger.info("Found %d unique instrument symbol(s).", len(all_symbols))
 
     price_map: Dict[str, Dict[str, float]] = {}
     sector_map: Dict[str, str] = {}
+    instrument_map: Dict[str, Dict[str, Any]] = {}
+    latest_price_map: Dict[str, float] = {}
 
     if all_symbols:
-        _ensure_instruments_and_timeseries(db_name, list(all_symbols), portfolio_data)
+        # Only portfolios that still need a NAV series may require new
+        # instruments to be created; the refresh pass works with the
+        # instruments that already exist.
+        if missing_nav_symbols:
+            missing_nav_data = [
+                (portfolio, holdings)
+                for portfolio, holdings in portfolio_data
+                if not portfolio.get("nav_timeseries")
+            ]
+            _ensure_instruments_and_timeseries(db_name, list(missing_nav_symbols), missing_nav_data)
 
         logger.info(
             "Fetching instruments for %d symbol(s) from '%s.instruments'...",
@@ -429,18 +565,24 @@ def run_once(db_name: str) -> None:
         price_map = _smooth_price_map(_build_instrument_price_map(instruments))
         instrument_map = _build_instrument_map(instruments)
         sector_map = _build_symbol_sector_map(instruments)
+        latest_price_map = _get_latest_price_map(price_map)
 
-    updated_nav = 0
+    created_nav = 0
+    refreshed_nav = 0
     updated_risk = 0
     failed: List[str] = []
 
     for portfolio, holdings in portfolio_data:
         account_number = portfolio.get("accountNumber", "N/A")
+        is_new = not portfolio.get("nav_timeseries")
         try:
             nav_timeseries = _calculate_nav_timeseries(holdings, price_map)
-            if nav_timeseries:
+            if not nav_timeseries:
+                logger.info("No NAV data generated for accountNumber=%s; skipping risk.", account_number)
+                continue
+
+            if is_new:
                 portfolio_values = _calculate_portfolio_values(holdings, instrument_map)
-                latest_price_map = _get_latest_price_map(price_map)
                 enriched_holdings = _enrich_holdings(holdings, instrument_map, latest_price_map)
                 _update_portfolio_nav(db_name, portfolio, nav_timeseries, portfolio_values, enriched_holdings)
                 logger.info(
@@ -448,32 +590,39 @@ def run_once(db_name: str) -> None:
                     account_number,
                     len(nav_timeseries),
                 )
-                updated_nav += 1
+                created_nav += 1
 
-                risk_score = calculate_risk_score(nav_timeseries, holdings, sector_map)
-                risk_label = get_risk_label(risk_score)
-                drawdown_metrics = calculate_drawdown_metrics(nav_timeseries)
-                update_portfolio_metrics(db_name, account_number, risk_score, risk_label, drawdown_metrics)
-                logger.info(
-                    "Updated risk for accountNumber=%s: riskScore=%s, riskLabel=%s, "
-                    "maxDrawdown=%s, maxWeeklyDrawdown=%s, maxYearlyDrawdown=%s",
-                    account_number,
-                    risk_score,
-                    risk_label,
-                    drawdown_metrics["maxDrawdown"],
-                    drawdown_metrics["maxWeeklyDrawdown"],
-                    drawdown_metrics["maxYearlyDrawdown"],
-                )
-                updated_risk += 1
+                if _update_risk_metrics_if_changed(
+                    db_name, portfolio, nav_timeseries, enriched_holdings, sector_map
+                ):
+                    updated_risk += 1
             else:
-                logger.info("No NAV data generated for accountNumber=%s; skipping risk.", account_number)
+                if nav_timeseries != portfolio.get("nav_timeseries"):
+                    _update_portfolio_nav_timeseries(db_name, account_number, nav_timeseries)
+                    logger.info(
+                        "Refreshed nav_timeseries for accountNumber=%s: %d date(s).",
+                        account_number,
+                        len(nav_timeseries),
+                    )
+                    refreshed_nav += 1
+
+                if _holdings_have_market_values(holdings):
+                    risk_holdings = holdings
+                else:
+                    risk_holdings = _enrich_holdings(holdings, instrument_map, latest_price_map)
+
+                if _update_risk_metrics_if_changed(
+                    db_name, portfolio, nav_timeseries, risk_holdings, sector_map
+                ):
+                    updated_risk += 1
         except RuntimeError as e:
             logger.error("Failed for accountNumber=%s: %s", account_number, e)
             failed.append(str(account_number))
 
     logger.info(
-        "Cycle summary: %d portfolio(s) NAV updated, %d risk updated, %d failed: %s",
-        updated_nav,
+        "Cycle summary: %d NAV created, %d NAV refreshed, %d risk updated, %d failed: %s",
+        created_nav,
+        refreshed_nav,
         updated_risk,
         len(failed),
         failed,
