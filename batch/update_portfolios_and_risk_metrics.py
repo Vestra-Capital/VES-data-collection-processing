@@ -39,8 +39,8 @@ import os
 import sys
 import time
 from collections import OrderedDict
-from datetime import date, datetime
-from typing import Any, Dict, List
+from datetime import date, datetime, timezone
+from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -436,6 +436,204 @@ def _holdings_have_market_values(holdings: List[Dict[str, Any]]) -> bool:
     )
 
 
+def _fetch_clients(db_name: str) -> List[Dict[str, Any]]:
+    """Fetch all client documents from the ``clients`` collection."""
+    client = get_mongo_client()
+    try:
+        db = client[db_name]
+        return list(db["clients"].find({}, {"_id": 0}))
+    except PyMongoError as e:
+        raise RuntimeError(f"Failed to fetch clients: {e}") from e
+    finally:
+        client.close()
+
+
+def _fetch_existing_fee_account_numbers(db_name: str) -> set:
+    """Return the set of accountNumbers that already have a fees document."""
+    client = get_mongo_client()
+    try:
+        db = client[db_name]
+        cursor = db["fees"].find({}, {"accountNumber": 1, "_id": 0})
+        return {str(doc.get("accountNumber")) for doc in cursor if doc.get("accountNumber")}
+    except PyMongoError as e:
+        raise RuntimeError(f"Failed to fetch existing fees documents: {e}") from e
+    finally:
+        client.close()
+
+
+def _calculate_total_cash(cash_data: Any) -> float:
+    """Sum the bank balance across all cash bank accounts for an account."""
+    total = 0.0
+    if not isinstance(cash_data, dict):
+        return total
+    bank_accounts = cash_data.get("bankAccounts") or []
+    if not isinstance(bank_accounts, list):
+        return total
+    for bank_account in bank_accounts:
+        if not isinstance(bank_account, dict):
+            continue
+        total += _to_float(bank_account.get("bankBalance"))
+    return total
+
+
+def _to_float(value: Any) -> float:
+    """Safely convert a value to float."""
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
+
+def _latest_nav_on_or_before(
+    nav_timeseries: List[Dict[str, Any]],
+    target_date: datetime,
+) -> Optional[float]:
+    """Return the latest ``nav`` from ``nav_timeseries`` on or before ``target_date``."""
+    latest_nav: Optional[float] = None
+    target_date_only = target_date.date()
+
+    for entry in nav_timeseries:
+        if not isinstance(entry, dict):
+            continue
+        raw_date = entry.get("date")
+        nav = _to_float(entry.get("nav"))
+        if not raw_date or nav <= 0:
+            continue
+        try:
+            entry_date = datetime.strptime(raw_date, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            continue
+        if entry_date <= target_date_only:
+            latest_nav = nav
+        else:
+            break
+
+    return latest_nav
+
+
+def _create_fees_documents_for_missing_portfolios(db_name: str) -> None:
+    """Create fees documents for portfolios that have NAV data but no fees entry.
+
+    For each portfolio with a ``nav_timeseries``, if no corresponding document
+    exists in the ``fees`` collection, a new AUM snapshot is created with the
+    latest NAV as ``totalHoldings`` and current cash as ``totalCash``.
+    """
+    clients = _fetch_clients(db_name)
+    if not clients:
+        logger.info("No clients found; skipping fees document creation.")
+        return
+
+    existing_account_numbers = _fetch_existing_fee_account_numbers(db_name)
+
+    # Fetch all portfolios
+    client = get_mongo_client()
+    try:
+        db = client[db_name]
+        portfolios = list(db["portfolios"].find({}, {"_id": 0}))
+    except PyMongoError as e:
+        raise RuntimeError(f"Failed to fetch portfolios: {e}") from e
+    finally:
+        client.close()
+
+    # Build client lookup by accountNumber
+    client_map: Dict[str, Dict[str, Any]] = {}
+    for c in clients:
+        if isinstance(c, dict) and c.get("accountNumber"):
+            client_map[str(c["accountNumber"])] = c
+
+    fee_report_rate = float(os.getenv("FEES_REPORT_RATE", "1.5"))
+
+    created = 0
+    for portfolio in portfolios:
+        if not isinstance(portfolio, dict):
+            continue
+
+        account_number = str(portfolio.get("accountNumber", ""))
+        if not account_number:
+            continue
+
+        # Skip if a fees document already exists for this account
+        if account_number in existing_account_numbers:
+            continue
+
+        # Only create fees docs for portfolios that have NAV data
+        nav_timeseries = portfolio.get("nav_timeseries") or []
+        if not nav_timeseries:
+            continue
+
+        # Get the latest NAV and date from the portfolio's nav_timeseries
+        latest_nav_entry = None
+        latest_nav_date = None
+        latest_nav_value = None
+
+        for entry in reversed(nav_timeseries):
+            if not isinstance(entry, dict):
+                continue
+
+            raw_date = entry.get("date")
+            nav = _to_float(entry.get("nav"))
+
+            if not raw_date or nav <= 0:
+                continue
+
+            try:
+                entry_date = datetime.strptime(raw_date, "%Y-%m-%d")
+                if entry_date > latest_nav_date or latest_nav_date is None:
+                    latest_nav_date = entry_date
+                    latest_nav_value = nav
+                    latest_nav_entry = entry
+            except (TypeError, ValueError):
+                continue
+
+        if latest_nav_date is None or latest_nav_value is None:
+            continue
+
+        total_holdings = latest_nav_value
+        total_cash = _calculate_total_cash(portfolio.get("cash"))
+        total_aum = total_holdings + total_cash
+
+        client_doc = client_map.get(account_number, {})
+        account_name = client_doc.get("accountName", "")
+        client_category = client_doc.get("client_category", "")
+
+        # Use the latest NAV date (at midnight UTC) for generatedAt
+        # This ensures the fees document date reflects the portfolio valuation date
+        generated_at = latest_nav_date.strftime("%Y-%m-%dT00:00:00Z")
+
+        fee_doc = {
+            "accountNumber": account_number,
+            "accountName": account_name,
+            "client_category": client_category,
+            "generatedAt": generated_at,
+            "totalHoldings": round(total_holdings, 2),
+            "totalCash": round(total_cash, 2),
+            "totalAUM": round(total_aum, 2),
+            "feeReportRate": fee_report_rate,
+            "selected": True,
+        }
+
+        # Insert into fees collection
+        client = get_mongo_client()
+        try:
+            db = client[db_name]
+            db["fees"].insert_one(fee_doc)
+            created += 1
+            logger.info("Created fees document for accountNumber=%s (totalAUM=%.2f) dated %s.", 
+                        account_number, total_aum, generated_at)
+        except PyMongoError as e:
+            logger.error("Failed to create fees document for accountNumber=%s: %s", account_number, e)
+        finally:
+            client.close()
+
+    logger.info("Fees document creation summary: %d created.", created)
+
+
 def _update_portfolio_nav_timeseries(
     db_name: str,
     account_number: str,
@@ -627,6 +825,8 @@ def run_once(db_name: str) -> None:
         len(failed),
         failed,
     )
+
+    _create_fees_documents_for_missing_portfolios(db_name)
 
 
 def main() -> None:
