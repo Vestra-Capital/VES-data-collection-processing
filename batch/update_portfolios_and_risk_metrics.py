@@ -420,10 +420,10 @@ def _ensure_instruments_and_timeseries(
 
 def get_poll_interval() -> int:
     """Return the polling interval in seconds from environment."""
-    value = os.getenv("UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS", "30")
+    value = os.getenv("UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS", "5")
     try:
         interval = int(value)
-        return max(interval, 30)
+        return max(interval, 5)
     except (TypeError, ValueError):
         return 30
 
