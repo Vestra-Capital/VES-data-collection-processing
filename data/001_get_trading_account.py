@@ -28,6 +28,7 @@ import logging
 import os
 from typing import Any, Dict, List
 from urllib.error import HTTPError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
@@ -79,7 +80,7 @@ def _build_url(scope_item: Dict[str, Any]) -> str:
         params["includeInactive"] = "true" if scope_item["includeInactive"] else "false"
 
     if params:
-        query_string = "&".join(f"{k}={v}" for k, v in params.items())
+        query_string = urlencode(params)
         url = f"{API_URL}?{query_string}"
 
     return url
@@ -127,7 +128,10 @@ def fetch_trading_accounts(scope_item: Dict[str, Any]) -> Dict[str, Any]:
                     f"Response preview: {raw[:200]}"
                 ) from e
     except HTTPError as e:
-        _raise_for_status(e)
+        try:
+            _raise_for_status(e)
+        except RuntimeError as err:
+            raise RuntimeError(f"{err} (URL: {url})") from err
 
     raise RuntimeError("Unexpected state: request completed without returning data.")
 
