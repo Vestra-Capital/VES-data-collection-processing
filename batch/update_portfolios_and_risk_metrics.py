@@ -52,6 +52,8 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
+from data.cash_utils import calculate_total_cash
+
 logger = logging.getLogger(__name__)
 
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
@@ -461,21 +463,6 @@ def _fetch_existing_fee_account_numbers(db_name: str) -> set:
         client.close()
 
 
-def _calculate_total_cash(cash_data: Any) -> float:
-    """Sum the bank balance across all cash bank accounts for an account."""
-    total = 0.0
-    if not isinstance(cash_data, dict):
-        return total
-    bank_accounts = cash_data.get("bankAccounts") or []
-    if not isinstance(bank_accounts, list):
-        return total
-    for bank_account in bank_accounts:
-        if not isinstance(bank_account, dict):
-            continue
-        total += _to_float(bank_account.get("bankBalance"))
-    return total
-
-
 def _to_float(value: Any) -> float:
     """Safely convert a value to float."""
     if value is None:
@@ -595,7 +582,7 @@ def _create_fees_documents_for_missing_portfolios(db_name: str) -> None:
             continue
 
         total_holdings = latest_nav_value
-        total_cash = _calculate_total_cash(portfolio.get("cash"))
+        total_cash = calculate_total_cash(portfolio.get("cash"))
         total_aum = total_holdings + total_cash
 
         client_doc = client_map.get(account_number, {})

@@ -35,6 +35,8 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 load_dotenv(os.path.join(project_root, ".env"))
 
+from data.cash_utils import calculate_total_cash
+
 logger = logging.getLogger(__name__)
 
 DATABASE_NAME = os.getenv("DATABASE_NAME", "VESTRA_PROD")
@@ -483,13 +485,7 @@ def main() -> None:
             cash_data = portfolio.get("cash") or {}
             if not isinstance(cash_data, dict):
                 cash_data = {}
-            bank_accounts = cash_data.get("bankAccounts") or []
-            if not isinstance(bank_accounts, list):
-                bank_accounts = []
-            total_cash = sum(
-                _to_float(bank_account.get("bankBalance")) for bank_account in bank_accounts
-                if isinstance(bank_account, dict)
-            )
+            total_cash = calculate_total_cash(cash_data)
 
             holdings = portfolio.get("holdings", []) or []
             total_pnl = _calculate_account_pnl(holdings, price_map, current)

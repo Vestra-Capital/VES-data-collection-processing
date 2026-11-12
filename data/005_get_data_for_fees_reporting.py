@@ -35,6 +35,8 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 
+from cash_utils import calculate_total_cash
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -212,28 +214,6 @@ def _latest_nav_on_or_before(
             break
 
     return latest_nav
-
-
-def _calculate_total_cash(cash_data: Any) -> float:
-    """Sum the bank balance across all cash bank accounts for an account.
-
-    Args:
-        cash_data: Cash sub-document from the portfolio document.
-
-    Returns:
-        Total cash value as a float.
-    """
-    total = 0.0
-    if not isinstance(cash_data, dict):
-        return total
-    bank_accounts = cash_data.get("bankAccounts") or []
-    if not isinstance(bank_accounts, list):
-        return total
-    for bank_account in bank_accounts:
-        if not isinstance(bank_account, dict):
-            continue
-        total += _to_float(bank_account.get("bankBalance"))
-    return total
 
 
 def _build_symbol(holding: Dict[str, Any]) -> str:
@@ -415,7 +395,7 @@ def _build_aum_document(
     account_number = str(client.get("accountNumber", ""))
     cash_data = portfolio.get("cash") or {}
 
-    total_cash = _calculate_total_cash(cash_data)
+    total_cash = calculate_total_cash(cash_data)
     total_aum = total_holdings + total_cash
     days_in_year = 366 if _is_leap_year(datetime.now(timezone.utc).year) else 365
     collected_fees = round((total_aum * (rate / 100)) / days_in_year, 2)
