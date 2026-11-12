@@ -321,7 +321,7 @@ def _enrich_client_document(doc: Dict[str, Any]) -> Dict[str, Any]:
     return enriched
 
 
-_PROTECTED_CLIENT_FIELDS = ("first_name", "last_name", "email", "telephone", "client_category")
+_PROTECTED_CLIENT_FIELDS = ("first_name", "last_name", "email", "telephone", "client_category", "master_account", "portfolio_strategy", "accredited_investor")
 
 
 def upsert_clients(documents: List[Dict[str, Any]]) -> None:
