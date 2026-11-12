@@ -1,3 +1,68 @@
+# =============================================================================
+# GitHub Actions workflow: Update Portfolios and Risk Metrics
+# =============================================================================
+#
+# Purpose:
+#   Keeps portfolio NAV (net asset value) time series and risk metrics up to
+#   date in MongoDB by running the long-lived daemon defined in
+#   batch/update_portfolios_and_risk_metrics.py.
+#
+#   For every polling cycle the script:
+#     1. Skips portfolios belonging to excluded client categories
+#        (configured via EXCLUDED_CLIENT_CATEGORIES; defaults to Wealth
+#        Management, Brokerage, Inactive).
+#     2. Finds portfolios missing a nav_timeseries and computes one from the
+#        portfolio's holdings plus each instrument's historical timeseries
+#        (price history), then writes nav_timeseries back to the portfolio.
+#     3. Refreshes portfolios that already have a nav_timeseries: recomputes
+#        the NAV series from current instrument prices and writes it only when
+#        it changed, then recalculates riskScore, riskLabel, and drawdown
+#        metrics (maxDrawdown, maxWeeklyDrawdown, maxYearlyDrawdown) and writes
+#        them only when they changed, so metrics never stay frozen on stale
+#        inputs.
+#     4. Ensures every instrument referenced by holdings exists in the
+#        instruments collection with metadata and timeseries, enriching missing
+#        ones via the configured market data provider (defaults to yfinance).
+#     5. Creates fees documents in the fees collection for portfolios that
+#        have NAV data but no fees entry yet (AUM snapshot using latest NAV +
+#        cash).
+#     6. Once per day (at 17:00 Australia/Sydney time, if not already done
+#        today) runs a daily market value update across portfolios.
+#
+#   The script runs as a daemon (infinite loop) polling MongoDB on an interval
+#   controlled by UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS (default 30s,
+#   minimum 30s).
+#
+# Relationship with data_collection.yml:
+#   This workflow does NOT fetch raw market data from external APIs. That is the
+#   job of .github/workflows/data_collection.yml, which runs batch/data_collection.py
+#   to pull trading accounts, portfolio holdings, cash balances, and trades
+#   history from the Morrison API and persist them into MongoDB (clients,
+#   portfolios, trades collections).
+#
+#   This workflow runs downstream of data collection: it reads the holdings and
+#   cash already stored in MongoDB, derives nav_timeseries and risk metrics from
+#   them (plus instrument price timeseries), and writes the computed NAV and
+#   risk metrics back into the portfolios collection. It also enriches the
+#   instruments collection and creates missing fees documents.
+#
+#   Typical order of operations: data_collection populates the raw data first,
+#   then update_portfolios_and_risk_metrics derives NAV and risk metrics from
+#   that data. They can run on independent schedules.
+#
+# Triggers:
+#   - push to main: runs on every push to the main branch.
+#   - schedule: runs every 4 hours at minute 0 (cron "0 */4 * * *").
+#   - workflow_dispatch: can be triggered manually from the Actions tab.
+#
+# Environment secrets required (configured in the repository Settings > Secrets):
+#   MONGODB_SRV             - MongoDB connection string.
+#   DATABASE_NAME           - Target database name (defaults to VESTRA_PROD in
+#                             the script).
+#   MORRISON_ACCESS_KEY     - API key for the Morrison market data provider.
+#   MORRISON_API_BASE_URL   - Base URL for the Morrison market data provider.
+#
+# =============================================================================
 name: Update Portfolios and Risk Metrics
 
 on:
@@ -5,21 +70,37 @@ on:
     branches:
       - main
   schedule:
-    - cron: '0 */4 * * *'
-  workflow_dispatch:
+    - cron: '0 */4 * * *'   # Every 4 hours at minute 0 (UTC)
+  workflow_dispatch:        # Manual trigger from the GitHub Actions tab
 
 jobs:
   backfill:
+    # Job that runs the portfolio/risk metrics update daemon on GitHub-hosted
+    # Ubuntu runners.
     runs-on: ubuntu-latest
     env:
+      # Secrets injected as environment variables so the Python script can read
+      # them via os.getenv(). Do not hardcode credentials here.
       MONGODB_SRV: ${{ secrets.MONGODB_SRV }}
       DATABASE_NAME: ${{ secrets.DATABASE_NAME }}
       MORRISON_ACCESS_KEY: ${{ secrets.MORRISON_ACCESS_KEY }}
       MORRISON_API_BASE_URL: ${{ secrets.MORRISON_API_BASE_URL }}
     steps:
+      # Check out the repository so the batch script is available on the runner.
       - uses: actions/checkout@v4
+
+      # Set up Python 3.12, matching the version used to develop/test this
+      # project's batch scripts.
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # Install Python dependencies listed in requirements.txt (e.g. pymongo,
+      # python-dotenv, zoneinfo backport, etc.) needed by the batch script.
       - run: pip install -r requirements.txt
+
+      # Execute the portfolio/risk metrics updater daemon.
+      # See batch/update_portfolios_and_risk_metrics.py for the full
+      # implementation. The script reads the environment variables above and
+      # polls MongoDB until the GitHub Actions job times out or is cancelled.
       - run: python batch/update_portfolios_and_risk_metrics.py

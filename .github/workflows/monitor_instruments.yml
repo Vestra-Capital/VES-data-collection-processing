@@ -1,5 +1,52 @@
 name: Monitor Instruments
 
+# =============================================================================
+# GitHub Actions Workflow: Monitor Instruments
+# =============================================================================
+#
+# Purpose:
+#   Runs on every push to main, on a cron schedule, or on manual dispatch to
+#   monitor portfolios for new instruments and add them to the instruments
+#   collection in MongoDB. It executes `batch/monitor_instruments.py`, which
+#   polls active portfolios (client_category != "Inactive"), extracts instrument
+#   symbols (securityCode.marketCode_yf) from holdings, detects symbols missing
+#   from the instruments collection, fetches metadata for each missing symbol via
+#   the configured market data provider (defaults to yfinance), and upserts the
+#   new instrument documents into MongoDB.
+#
+#   NOTE: the script runs as a persistent daemon (an infinite polling loop with
+#   MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS between cycles, default 300s /
+#   minimum 60s). GitHub Actions jobs have a maximum runtime (default 6 hours),
+#   so this step runs until it is cancelled, fails, or hits the job timeout. If
+#   continuous operation is intended, run it as a long-lived service outside of
+#   Actions, or change the script to perform a single poll cycle and exit.
+#
+# Schedule:
+#   - push to main:     -> runs on every push to the main branch
+#   - Cron: '0 */4 * * *' -> every 4 hours at minute 0 UTC
+#     (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC)
+#   - Manual trigger:   -> available via the Actions tab (workflow_dispatch)
+#
+#   A scheduled job consists of a cron expression defining when GitHub Actions
+#   spins up a fresh runner and executes the workflow jobs. Cron syntax is:
+#   `minute hour day-of-month month day-of-week`, all times in UTC. When the
+#   next fire time arrives, GitHub queues a run just like a push or manual
+#   dispatch, and the runner executes all jobs under `jobs:` from checkout to
+#   the final step, subject to the job's default timeout (6 hours). GitHub may
+#   skip scheduled runs if the repository has had no recent activity; pushing
+#   code or triggering manually resumes scheduled runs.
+#
+# Related files:
+#   - batch/monitor_instruments.py   (instrument monitoring daemon)
+#
+# Required repository secrets (configured via GitHub Settings > Secrets and variables > Actions):
+#   - MONGODB_SRV            -> MongoDB connection string
+#   - DATABASE_NAME          -> target database name
+#   - MORRISON_ACCESS_KEY    -> Morrison API access key
+#   - MORRISON_API_BASE_URL  -> Morrison API base URL
+# =============================================================================
+name: Monitor Instruments
+
 on:
   push:
     branches:
@@ -10,16 +57,31 @@ on:
 
 jobs:
   monitor:
+    # Each job runs on a fresh GitHub-hosted Ubuntu runner.
     runs-on: ubuntu-latest
     env:
+      # Secrets are injected as environment variables from GitHub repository settings
+      # (Settings > Secrets and variables > Actions). Never hardcode credentials here.
       MONGODB_SRV: ${{ secrets.MONGODB_SRV }}
       DATABASE_NAME: ${{ secrets.DATABASE_NAME }}
       MORRISON_ACCESS_KEY: ${{ secrets.MORRISON_ACCESS_KEY }}
       MORRISON_API_BASE_URL: ${{ secrets.MORRISON_API_BASE_URL }}
     steps:
+      # Checks out the repository code onto the runner so subsequent steps can use it.
       - uses: actions/checkout@v4
+      # Sets up Python 3.12 on the runner so the monitoring script can run.
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # Installs the project's Python dependencies listed at the repository root.
       - run: pip install -r requirements.txt
+      # Executes the instrument monitoring daemon:
+      #   batch/monitor_instruments.py connects to MongoDB (using MONGODB_SRV /
+      #   DATABASE_NAME), fetches all portfolios whose client_category is not
+      #   "Inactive", extracts instrument symbols (securityCode.marketCode_yf) from
+      #   their holdings, compares them against the instruments collection, and for
+      #   any missing symbols fetches metadata via the configured market data provider
+      #   (defaults to yfinance; the Morrison access key / base URL env vars are
+      #   available if a Morrison-backed provider is configured) and upserts the new
+      #   instrument documents into MongoDB.
       - run: python batch/monitor_instruments.py

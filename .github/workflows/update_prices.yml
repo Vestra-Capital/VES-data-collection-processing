@@ -1,5 +1,36 @@
 name: Update Instrument Prices
 
+# Job summary:
+#   Polls current market prices for every instrument symbol stored in MongoDB,
+#   then writes each price back to the instrument's `currentPrice` field so that
+#   downstream pricing/risk calculations stay up to date.
+#
+# Triggers:
+#   - On every push to `main` (refresh prices immediately after code changes).
+#   - On a schedule: every 4 hours at minute 0 (cron: '0 */4 * * *').
+#
+# Environment variables:
+#   MONGODB_SRV                 - MongoDB connection string (from GitHub Secrets).
+#   DATABASE_NAME               - Database name (from GitHub Secrets).
+#   MARKET_DATA_PROVIDER        - Provider class path used to fetch prices
+#                                 (default: market.yfinance_provider.YFinanceProvider,
+#                                 i.e. Yahoo Finance via yfinance).
+#   PRICE_POLL_INTERVAL_SECONDS - Seconds to wait between price polls
+#                                 (default: 15).
+#
+# Script run (batch/price_streamer.py):
+#   1. load_symbols()          - Reads all unique `symbol` values from the
+#                                `instruments` collection in MongoDB.
+#   2. get_market_data_provider()- Dynamically imports and instantiates the
+#                                configured market data provider class.
+#   3. create_price_updater()  - Builds a callback that upserts `currentPrice`
+#                                for a symbol into the `instruments` collection.
+#   4. Polling loop            - Repeatedly fetches current prices for all
+#                                symbols via provider.fetch_current_prices(),
+#                                then writes each price back to MongoDB. Sleeps
+#                                for `PRICE_POLL_INTERVAL_SECONDS` between polls
+#                                until interrupted (the workflow timeout ends it).
+
 on:
   push:
     branches:
@@ -9,6 +40,9 @@ on:
 
 jobs:
   update-prices:
+    # Runs on GitHub-hosted Ubuntu runner. Timeout (~3h 55min) bounds the
+    # price-streamer polling loop; once reached, the job stops and prices are
+    # stale until the next run.
     runs-on: ubuntu-latest
     timeout-minutes: 235
     env:
@@ -17,9 +51,20 @@ jobs:
       MARKET_DATA_PROVIDER: market.yfinance_provider.YFinanceProvider
       PRICE_POLL_INTERVAL_SECONDS: '15'
     steps:
+      # Checks out the repository so the batch scripts and requirements are
+      # available on the runner.
       - uses: actions/checkout@v4
+
+      # Installs Python 3.12 so the pricing script can run.
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # Installs project dependencies (e.g. pymongo, yfinance, python-dotenv)
+      # declared in requirements.txt.
       - run: pip install -r requirements.txt
+
+      # Runs the price streamer: polls current prices for all instruments from
+      # the configured market data provider (Yahoo Finance) and upserts each
+      # `currentPrice` into MongoDB. Runs until the job timeout stops it.
       - run: python batch/price_streamer.py

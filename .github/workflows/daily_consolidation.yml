@@ -1,11 +1,50 @@
+# =============================================================================
+# GitHub Actions Workflow: Daily Consolidation
+# =============================================================================
+#
+# Purpose:
+#   Runs once per day to execute the full VES data-collection pipeline. It
+#   orchestrates `batch/daily_consolidation.py`, which sequentially invokes a
+#   set of domain-specific data collection scripts (trading account, portfolio
+#   holdings, cash balances, instruments, timeseries, NAV, fees reporting, and
+#   risk score) that fetch data from external sources (MongoDB, Morrison API)
+#   and persist it into the VES database.
+#
+# Schedule:
+#   - Cron: '0 9 * * *'  -> every day at 09:00 UTC
+#   - Manual trigger:    -> available via the Actions tab (workflow_dispatch)
+#
+# Related files:
+#   - batch/daily_consolidation.py   (orchestrates the script pipeline)
+#   - data/001_get_trading_account.py
+#   - data/002_get_portfolio_holdings.py
+#   - data/003_get_cash_balances.py
+#   - batch/get_instruments.py
+#   - batch/get_instruments_timeseries.py
+#   - batch/get_portfolios_nav.py
+#   - data/005_get_data_for_fees_reporting.py
+#   - data/006_get_risk_score.py
+#
+# Required repository secrets (configured via GitHub Settings > Secrets and variables > Actions):
+#   - MONGODB_SRV            -> MongoDB connection string
+#   - DATABASE_NAME          -> target database name
+#   - MORRISON_ACCESS_KEY    -> Morrison API access key
+#   - MORRISON_API_BASE_URL  -> Morrison API base URL
+# =============================================================================
+
 name: Daily Consolidation
 
 on:
+  # Scheduled trigger: runs every day at 09:00 UTC.
   schedule:
     - cron: '0 9 * * *'
+  # Manual trigger: allows running the workflow on demand from the Actions UI.
   workflow_dispatch:
 
 jobs:
+  # collect-data executes the daily data-collection pipeline on a fresh
+  # ubuntu-latest runner. All environment variables are sourced from encrypted
+  # repository secrets so they never appear in plain text.
   collect-data:
     runs-on: ubuntu-latest
     env:
@@ -14,9 +53,14 @@ jobs:
       MORRISON_ACCESS_KEY: ${{ secrets.MORRISON_ACCESS_KEY }}
       MORRISON_API_BASE_URL: ${{ secrets.MORRISON_API_BASE_URL }}
     steps:
+      # Check out the repository so the runner has access to the code.
       - uses: actions/checkout@v4
+      # Set up Python 3.12 for running the collection scripts.
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # Install Python dependencies required by the data collection scripts.
       - run: pip install -r requirements.txt
+      # Run the main consolidation entry point. See batch/daily_consolidation.py
+      # for the ordered list of scripts executed sequentially.
       - run: python batch/daily_consolidation.py

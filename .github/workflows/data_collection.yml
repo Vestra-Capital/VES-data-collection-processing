@@ -1,22 +1,105 @@
+# =============================================================================
+# GitHub Actions Workflow: Data Collection
+# =============================================================================
+#
+# Purpose:
+#   Automatically collects trading account, cash balance, trade history, and
+#   other market data from Morrison (and related external APIs), then persists
+#   it into the project's MongoDB database. This keeps the data layer fresh so
+#   downstream reporting, portfolio, and risk-metric calculations always run
+#   against up-to-date records.
+#
+# Triggers:
+#   1. Schedule - runs every hour at minute 0 (cron '0 * * * *').
+#   2. Manual dispatch - can be triggered on demand from the GitHub Actions UI
+#      (workflow_dispatch), e.g. to backfill or re-run after an outage.
+#
+# Job: collect-data
+#   Runs on a fresh ubuntu-latest runner. Each run:
+#     a. Checks out this repository (actions/checkout@v4).
+#     b. Sets up Python 3.12 (actions/setup-python@v5).
+#     c. Installs Python dependencies from requirements.txt.
+#     d. Executes batch/data_collection.py, the data collection orchestrator.
+#
+# What batch/data_collection.py does:
+#   It is a sequential pipeline runner that executes four data-collection
+#   scripts in order, stopping at the first failure:
+#
+#     1. data/001_get_trading_account.py
+#        - Calls the Morrison tradingaccounts/v2 API for each adviser scope
+#          (organisationCode, branchCode, adviserCode).
+#        - Enriches each account with derived client fields: first_name,
+#          last_name, email, telephone, client_category.
+#        - Upserts into MongoDB clients collection, keyed by accountNumber.
+#          Protected fields (name, email, phone, category) are preserved on
+#          update; accounts not in the current batch are purged.
+#
+#     2. data/002_get_portfolio_holdings.py
+#        - Fetches portfolio holdings per account and upserts them into
+#          MongoDB (holdings data).
+#
+#     3. data/003_get_cash_balances.py
+#        - Reads client documents from MongoDB clients collection.
+#        - Calls the Morrison cashbalances/v1 API for each accountNumber.
+#        - Upserts cash data into the portfolios collection as a sibling
+#          `cash` node alongside holdings (existing holdings preserved).
+#
+#     4. data/004_get_trades_history.py
+#        - Reads active client documents from MongoDB clients collection.
+#        - Calls the Morrison equityholdingtransactions/v1 API per account.
+#        - Enriches trades with FIFO realized P&L (costBasis, sellValue, pnl,
+#          pnlPercent, matchedBuyDate) by matching SELLs against BUY lots.
+#        - Upserts into MongoDB trades collection; purges trades for accounts
+#          not in the current batch.
+#
+# Environment variables (all injected from GitHub repository secrets, never
+# hard-coded):
+#   MONGODB_SRV             - MongoDB connection string (SRV format).
+#   DATABASE_NAME           - Name of the target MongoDB database.
+#   MORRISON_ACCESS_KEY     - API access key for the Morrison data provider.
+#   MORRISON_API_BASE_URL   - Base URL of the Morrison API endpoint.
+#
+# Notes:
+#   - secrets must be configured in the repository settings under
+#     Settings > Secrets and variables > Actions.
+#   - If batch/data_collection.py (or any child script) fails, the job fails
+#     and GitHub can surface the failure in the Actions tab / via notifications.
+# =============================================================================
+
 name: Data Collection
 
 on:
   schedule:
+    # Run every hour at minute 0 (UTC). Cron format: minute hour day month weekday.
     - cron: '0 * * * *'
+  # Allow manual triggering from the GitHub Actions UI.
   workflow_dispatch:
 
 jobs:
   collect-data:
+    # Execute on GitHub's hosted Ubuntu runner (latest available image).
     runs-on: ubuntu-latest
+    # Inject secrets as environment variables so the Python script can read them
+    # via os.environ without hard-coding credentials in the repo.
     env:
       MONGODB_SRV: ${{ secrets.MONGODB_SRV }}
       DATABASE_NAME: ${{ secrets.DATABASE_NAME }}
       MORRISON_ACCESS_KEY: ${{ secrets.MORRISON_ACCESS_KEY }}
       MORRISON_API_BASE_URL: ${{ secrets.MORRISON_API_BASE_URL }}
     steps:
+      # Check out the repository so the runner has access to the source code
+      # (Python scripts, requirements.txt, etc.).
       - uses: actions/checkout@v4
+      # Set up Python 3.12 on the runner so we can execute the collection script.
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # Install all third-party Python dependencies listed in requirements.txt
+      # (e.g. pymongo, requests, etc.) required by batch/data_collection.py.
       - run: pip install -r requirements.txt
+      # Run the data collection orchestration script batch/data_collection.py.
+      # It executes the four collection scripts sequentially (trading accounts,
+      # portfolio holdings, cash balances, trades history), each calling the
+      # Morrison API and persisting results to MongoDB using the environment
+      # variables injected above. Stops at the first failing script.
       - run: python batch/data_collection.py
