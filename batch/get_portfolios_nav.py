@@ -304,6 +304,20 @@ def _calculate_portfolio_values(
     }
 
 
+def _merge_nav_timeseries(
+    existing: List[Dict[str, Any]],
+    new: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+    for entry in existing or []:
+        if isinstance(entry, dict) and entry.get("date"):
+            merged[entry["date"]] = entry
+    for entry in new or []:
+        if isinstance(entry, dict) and entry.get("date"):
+            merged[entry["date"]] = entry
+    return [merged[date] for date in sorted(merged)]
+
+
 def _update_portfolio_nav(
     db_name: str,
     portfolio: Dict[str, Any],
@@ -318,9 +332,11 @@ def _update_portfolio_nav(
         account_number = portfolio.get("accountNumber")
         if not account_number:
             return
+        existing_nav = portfolio.get("nav_timeseries") or []
+        merged_nav = _merge_nav_timeseries(existing_nav, nav_timeseries)
         collection.update_one(
             {"accountNumber": account_number},
-            {"$set": {"nav_timeseries": nav_timeseries, "holdings": enriched_holdings, **portfolio_values}},
+            {"$set": {"nav_timeseries": merged_nav, "holdings": enriched_holdings, **portfolio_values}},
         )
     except PyMongoError as e:
         raise RuntimeError(f"Failed to update portfolio NAV for accountNumber={account_number}: {e}") from e

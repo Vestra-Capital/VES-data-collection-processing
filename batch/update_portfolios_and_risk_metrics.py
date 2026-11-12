@@ -277,8 +277,10 @@ from batch.get_portfolios_nav import (
     _calculate_portfolio_values,
     _enrich_holdings,
     _get_latest_price_map,
+    _merge_nav_timeseries,
     _smooth_price_map,
     _update_portfolio_nav,
+    _update_portfolio_nav_timeseries,
     _update_holdings_market_values,
     fetch_instruments,
     fetch_portfolios_with_client_exclusion,
@@ -782,12 +784,14 @@ def run_once(db_name: str) -> None:
                 ):
                     updated_risk += 1
             else:
-                if nav_timeseries != portfolio.get("nav_timeseries"):
-                    _update_portfolio_nav_timeseries(db_name, account_number, nav_timeseries)
+                existing_nav = portfolio.get("nav_timeseries") or []
+                merged_nav = _merge_nav_timeseries(existing_nav, nav_timeseries)
+                if merged_nav != existing_nav:
+                    _update_portfolio_nav_timeseries(db_name, account_number, merged_nav)
                     logger.info(
                         "Refreshed nav_timeseries for accountNumber=%s: %d date(s).",
                         account_number,
-                        len(nav_timeseries),
+                        len(merged_nav),
                     )
                     refreshed_nav += 1
 
