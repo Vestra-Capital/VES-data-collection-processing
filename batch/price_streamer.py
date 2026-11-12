@@ -15,10 +15,11 @@ Environment variables:
 """
 
 import logging
+import math
 import os
 import sys
 import time
-from typing import Callable
+from typing import Any, Callable, Dict
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -118,12 +119,37 @@ def main() -> None:
     on_price = create_price_updater(db_name)
     logger.info("Starting price poller (Ctrl+C to stop)...")
 
+    last_valid_price: Dict[str, float] = {}
+
+    def _is_valid_price(price: Any) -> bool:
+        if not isinstance(price, (int, float)) or isinstance(price, bool):
+            return False
+        if not math.isfinite(price):
+            return False
+        return price > 0
+
     while True:
         try:
             prices = provider.fetch_current_prices(symbols)
             for symbol, price in prices.items():
-                logger.info("Updating %s -> %s", symbol, price)
+                if not _is_valid_price(price):
+                    if symbol in last_valid_price:
+                        logger.warning(
+                            "Invalid price %s for %s; falling back to previous valid price %s.",
+                            price,
+                            symbol,
+                            last_valid_price[symbol],
+                        )
+                        on_price(symbol, last_valid_price[symbol])
+                    else:
+                        logger.warning(
+                            "Skipping invalid price %s for %s (no previous valid price).",
+                            price,
+                            symbol,
+                        )
+                    continue
                 on_price(symbol, price)
+                last_valid_price[symbol] = price
         except KeyboardInterrupt:
             logger.info("Interrupted; shutting down.")
             break
