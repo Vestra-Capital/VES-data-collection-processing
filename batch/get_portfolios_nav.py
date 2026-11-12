@@ -257,7 +257,7 @@ def _calculate_nav_timeseries(
     if not contributions:
         return []
 
-    start_date = max(min(date_prices) for _, date_prices in contributions)
+    start_date = min(min(date_prices) for _, date_prices in contributions)
 
     nav_by_date: Dict[str, float] = {}
     for total_holding, date_prices in contributions:
