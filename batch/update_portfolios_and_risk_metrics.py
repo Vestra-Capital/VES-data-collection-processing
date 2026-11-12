@@ -280,7 +280,6 @@ from batch.get_portfolios_nav import (
     _merge_nav_timeseries,
     _smooth_price_map,
     _update_portfolio_nav,
-    _update_portfolio_nav_timeseries,
     _update_holdings_market_values,
     fetch_instruments,
     fetch_portfolios_with_client_exclusion,
