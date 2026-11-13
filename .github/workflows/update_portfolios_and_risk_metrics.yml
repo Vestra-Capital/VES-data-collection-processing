@@ -70,13 +70,10 @@ name: Update Portfolios and Risk Metrics
 # (batch/daemon_worker.py). Runs update_portfolios_and_risk_metrics concurrently
 # with the other daemons in a single Background Worker service via Render instead.
 # =============================================================================
-# on:
-#   push:
-#     branches:
-#       - main
-#   schedule:
-#     - cron: '0 */4 * * *'   # Every 4 hours at minute 0 (UTC)
-#   workflow_dispatch:        # Manual trigger from the GitHub Actions tab
+# Kept as a valid (but manually-triggered-only) workflow so the file parses.
+# It will NOT run on schedule or push. Trigger manually from the Actions UI if ever needed.
+on:
+  workflow_dispatch:
 
 jobs:
   backfill:

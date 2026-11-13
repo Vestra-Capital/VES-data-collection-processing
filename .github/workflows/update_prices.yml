@@ -1,10 +1,14 @@
+name: Update Instrument Prices
+
 # =============================================================================
 # DISABLED — Replaced by Render Background Worker "daemon-worker"
 # (batch/daemon_worker.py). Runs price_streamer concurrently with the other
 # daemons in a single Background Worker service via Render instead.
 # =============================================================================
-
-name: Update Instrument Prices
+# Kept as a valid (but manually-triggered-only) workflow so the file parses.
+# It will NOT run on schedule or push. Trigger manually from the Actions UI if ever needed.
+on:
+  workflow_dispatch:
 
 # Job summary:
 #   Polls current market prices for every instrument symbol stored in MongoDB,

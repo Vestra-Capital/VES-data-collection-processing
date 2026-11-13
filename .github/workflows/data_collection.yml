@@ -72,12 +72,10 @@ name: Data Collection
 # DISABLED — Replaced by Render Cron Job "data-collection" (render.yaml).
 # Runs batch/data_collection.py hourly at :00 UTC via Render instead.
 # =============================================================================
-# on:
-#   schedule:
-#     # Run every hour at minute 0 (UTC). Cron format: minute hour day month weekday.
-#     - cron: '0 * * * *'
-#   # Allow manual triggering from the GitHub Actions UI.
-#   workflow_dispatch:
+# Kept as a valid (but manually-triggered-only) workflow so the file parses.
+# It will NOT run on schedule or push. Trigger manually from the Actions UI if ever needed.
+on:
+  workflow_dispatch:
 
 jobs:
   collect-data:

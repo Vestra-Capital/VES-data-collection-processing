@@ -50,13 +50,10 @@ name: Monitor Instruments
 # (batch/daemon_worker.py). Runs monitor_instruments concurrently with the other
 # daemons in a single Background Worker service via Render instead.
 # =============================================================================
-# on:
-#   push:
-#     branches:
-#       - main
-#   schedule:
-#     - cron: '0 */4 * * *'
-#   workflow_dispatch:
+# Kept as a valid (but manually-triggered-only) workflow so the file parses.
+# It will NOT run on schedule or push. Trigger manually from the Actions UI if ever needed.
+on:
+  workflow_dispatch:
 
 jobs:
   monitor:

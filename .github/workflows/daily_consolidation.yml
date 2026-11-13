@@ -38,12 +38,10 @@ name: Daily Consolidation
 # DISABLED — Replaced by Render Cron Job "daily-consolidation" (render.yaml).
 # Runs batch/daily_consolidation.py daily at 09:00 UTC via Render instead.
 # =============================================================================
-# on:
-#   # Scheduled trigger: runs every day at 09:00 UTC.
-#   schedule:
-#     - cron: '0 9 * * *'
-#   # Manual trigger: allows running the workflow on demand from the Actions UI.
-#   workflow_dispatch:
+# Kept as a valid (but manually-triggered-only) workflow so the file parses.
+# It will NOT run on schedule or push. Trigger manually from the Actions UI if ever needed.
+on:
+  workflow_dispatch:
 
 jobs:
   # collect-data executes the daily data-collection pipeline on a fresh
