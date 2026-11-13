@@ -171,8 +171,24 @@ def main() -> None:
                 if idx > 0 and batch_delay > 0:
                     time.sleep(batch_delay)
                 batch_prices = provider.fetch_current_prices(batch)
+                fetched = len(batch_prices)
+                failed = len(batch) - fetched
                 all_prices.update(batch_prices)
+                logger.info(
+                    "Batch %d/%d: fetched %d/%d price(s) (%d failed/missing).",
+                    idx + 1,
+                    len(batches),
+                    fetched,
+                    len(batch),
+                    failed,
+                )
             prices = all_prices
+            logger.info(
+                "Poll cycle complete: %d/%d price(s) fetched across %d batch(es).",
+                len(prices),
+                len(symbols),
+                len(batches),
+            )
             for symbol, price in prices.items():
                 if not _is_valid_price(price):
                     if symbol in last_valid_price:
