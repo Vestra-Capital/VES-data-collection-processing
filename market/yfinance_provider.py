@@ -56,9 +56,12 @@ class YFinanceProvider(MarketDataProvider):
 
         session = create_session()
         try:
-            data = retry_on_429(
-                lambda: yf.download(symbols, period="1d", progress=False, session=session)
-            )
+            def _download_with_retry():
+                data = yf.download(symbols, period="1d", progress=False, session=session)
+                if data.empty:
+                    raise RuntimeError("Empty yfinance download result — possible rate limit")
+                return data
+            data = retry_on_429(_download_with_retry)
         finally:
             session.close()
 

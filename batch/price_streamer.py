@@ -11,11 +11,11 @@ Environment variables:
     MARKET_DATA_PROVIDER — Market data provider module path
         (defaults to ``market.yfinance_provider.YFinanceProvider``).
     PRICE_POLL_INTERVAL_SECONDS — Seconds between price polls
-        (defaults to ``15``).
+        (defaults to ``60``).
     PRICE_BATCH_SIZE — Max number of symbols per yfinance batch
-        (defaults to ``50``).
+        (defaults to ``30``).
     PRICE_BATCH_DELAY_SECONDS — Seconds to wait between batches
-        (defaults to ``2``).
+        (defaults to ``5``).
 """
 
 import logging
@@ -97,32 +97,32 @@ def get_market_data_provider() -> MarketDataProvider:
 
 def get_poll_interval() -> int:
     """Return the polling interval in seconds from environment."""
-    value = os.getenv("PRICE_POLL_INTERVAL_SECONDS", "15")
+    value = os.getenv("PRICE_POLL_INTERVAL_SECONDS", "60")
     try:
         interval = int(value)
-        return max(interval, 10)
+        return max(interval, 30)
     except (TypeError, ValueError):
-        return 15
+        return 60
 
 
 def get_batch_size() -> int:
     """Return the max number of symbols per yfinance batch."""
-    value = os.getenv("PRICE_BATCH_SIZE", "50")
+    value = os.getenv("PRICE_BATCH_SIZE", "30")
     try:
         size = int(value)
         return max(size, 1)
     except (TypeError, ValueError):
-        return 50
+        return 30
 
 
 def get_batch_delay() -> float:
     """Return the seconds to wait between symbol batches."""
-    value = os.getenv("PRICE_BATCH_DELAY_SECONDS", "2")
+    value = os.getenv("PRICE_BATCH_DELAY_SECONDS", "5")
     try:
         delay = float(value)
         return max(delay, 0)
     except (TypeError, ValueError):
-        return 2.0
+        return 5.0
 
 
 def _chunk_list(items: list, size: int) -> list:
