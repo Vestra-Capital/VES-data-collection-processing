@@ -22,12 +22,22 @@ Environment variables (set in the Render dashboard Environment tab):
     MORRISON_ACCESS_KEY       - Morrison API access key (required)
     MORRISON_API_BASE_URL     - Morrison API base URL (required)
     MARKET_DATA_PROVIDER      - Market data provider module path
-    PRICE_POLL_INTERVAL_SECONDS - Seconds between price polls (default: 60)
+    PRICE_POLL_INTERVAL_SECONDS - Seconds between price polls (default: 15)
     UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS - Seconds between portfolio/risk cycles (default: 300)
 """
 
 import logging
+import os
+import sys
 import threading
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 from batch.monitor_instruments import main as monitor_instruments_main
 from batch.price_streamer import main as price_streamer_main
