@@ -24,12 +24,15 @@ Environment variables (set in the Render dashboard Environment tab):
     MARKET_DATA_PROVIDER      - Market data provider module path
     PRICE_POLL_INTERVAL_SECONDS - Seconds between price polls (default: 15)
     UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS - Seconds between portfolio/risk cycles (default: 300)
+    SKIP_WEEKENDS             - Set to "false" to run daemons on Saturday/Sunday too (default: "true")
 """
 
+import datetime
 import logging
 import os
 import sys
 import threading
+import time
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
@@ -55,6 +58,32 @@ DAEMONS = [
     ("update-prices", price_streamer_main),
 ]
 
+WEEKEND_DAYS = {5, 6}  # Saturday=5, Sunday=6
+
+
+def is_weekend() -> bool:
+    return datetime.datetime.now().weekday() in WEEKEND_DAYS
+
+
+def wait_for_weekday() -> None:
+    """Sleep until the next Monday 00:00 if today is a weekend day."""
+    while is_weekend():
+        now = datetime.datetime.now()
+        days_ahead = 7 - now.weekday()  # Sat(5)->2, Sun(6)->1 days to Monday
+        next_monday = (now + datetime.timedelta(days=days_ahead)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        sleep_seconds = max((next_monday - now).total_seconds(), 60)
+        # Re-check at most every hour so clock changes are picked up.
+        sleep_seconds = min(sleep_seconds, 3600)
+        logger.info(
+            "Weekend detected. Daemons paused until Monday %s (sleeping %ds).",
+            next_monday.date(),
+            int(sleep_seconds),
+        )
+        time.sleep(sleep_seconds)
+    logger.info("Weekday detected. Starting daemons.")
+
 
 def _run(name: str, target) -> None:
     """Run a daemon's main loop, logging but not propagating fatal errors."""
@@ -67,6 +96,11 @@ def _run(name: str, target) -> None:
 
 
 def main() -> None:
+    skip_weekends = os.getenv("SKIP_WEEKENDS", "true").lower() == "true"
+
+    if skip_weekends:
+        wait_for_weekday()
+
     logger.info("Starting combined daemon worker with %d daemon(s).", len(DAEMONS))
 
     threads = [
