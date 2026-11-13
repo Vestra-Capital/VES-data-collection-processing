@@ -11,7 +11,7 @@ Environment variables:
     MARKET_DATA_PROVIDER — Market data provider module path
         (defaults to ``market.yfinance_provider.YFinanceProvider``).
     PRICE_POLL_INTERVAL_SECONDS — Seconds between price polls
-        (defaults to ``60``).
+        (defaults to ``15``).
 """
 
 import logging
@@ -98,7 +98,7 @@ def get_poll_interval() -> int:
         interval = int(value)
         return max(interval, 10)
     except (TypeError, ValueError):
-        return 60
+        return 15
 
 
 def main() -> None:

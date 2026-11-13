@@ -1678,7 +1678,7 @@ Optional variables (used by the daemon workers):
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `MARKET_DATA_PROVIDER` | Market data provider module path | `market.yfinance_provider.YFinanceProvider` |
-| `PRICE_POLL_INTERVAL_SECONDS` | Seconds between price polls | `60` |
+| `PRICE_POLL_INTERVAL_SECONDS` | Seconds between price polls | `15` |
 | `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` | Seconds between portfolio/risk update cycles | `300` |
 
 Render Cron Jobs and Background Workers require a **Starter plan or higher**
