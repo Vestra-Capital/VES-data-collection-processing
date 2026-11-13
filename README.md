@@ -1106,7 +1106,7 @@ DATABASE_NAME=VESTRA_PROD
 # ===========================================
 MARKET_DATA_PROVIDER=market.yfinance_provider.YFinanceProvider
 PRICE_POLL_INTERVAL_SECONDS=60
-PRICE_BATCH_SIZE=2
+PRICE_BATCH_SIZE=100
 PRICE_BATCH_DELAY_SECONDS=5
 
 # ===========================================
@@ -1376,7 +1376,7 @@ python batch/price_streamer.py
 
 **Environment variables:**
 - `PRICE_POLL_INTERVAL_SECONDS` — Seconds between price polls (defaults to `60`, minimum `30`).
-- `PRICE_BATCH_SIZE` — Max symbols per yfinance batch (defaults to `2`).
+- `PRICE_BATCH_SIZE` — Max symbols per yfinance batch (defaults to `100`).
 - `PRICE_BATCH_DELAY_SECONDS` — Seconds between batches (defaults to `5`).
 
 ### 14. Start Portfolio / Risk Updater Daemon
@@ -1685,7 +1685,7 @@ Optional variables (used by the daemon workers):
 |----------|-------------|---------|
 | `MARKET_DATA_PROVIDER` | Market data provider module path | `market.yfinance_provider.YFinanceProvider` |
 | `PRICE_POLL_INTERVAL_SECONDS` | Seconds between price polls | `60` |
-| `PRICE_BATCH_SIZE` | Max symbols per yfinance batch | `2` |
+| `PRICE_BATCH_SIZE` | Max symbols per yfinance batch | `100` |
 | `PRICE_BATCH_DELAY_SECONDS` | Seconds between batches | `5` |
 | `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` | Seconds between portfolio/risk update cycles | `60` |
 | `MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS` | Seconds between instrument monitoring cycles | `300` |
