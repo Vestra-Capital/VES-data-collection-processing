@@ -20,6 +20,7 @@ A production-grade Python pipeline that retrieves trading account data from the 
 10. [Testing](#testing)
 11. [Deployment Considerations](#deployment-considerations)
 12. [CI/CD](#cicd)
+13. [Render Deployment](#render-deployment)
 
 ---
 
