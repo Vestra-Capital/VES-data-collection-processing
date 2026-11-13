@@ -10,7 +10,7 @@ Environment variables:
     MONGODB_SRV — MongoDB connection string.
     DATABASE_NAME — Database name (defaults to ``VESTRA_PROD``).
     MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS — Seconds between polling cycles
-        (defaults to ``300``, minimum ``60``).
+        (defaults to ``120``, minimum ``60``).
     MARKET_DATA_PROVIDER — Market data provider module path
         (defaults to ``market.yfinance_provider.YFinanceProvider``).
 """
@@ -55,12 +55,12 @@ def _get_market_data_provider() -> Any:
 
 def get_poll_interval() -> int:
     """Return the polling interval in seconds from environment."""
-    value = os.getenv("MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS", "300")
+    value = os.getenv("MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS", "120")
     try:
         interval = int(value)
         return max(interval, 60)
     except (TypeError, ValueError):
-        return 300
+        return 120
 
 
 def fetch_active_portfolios(db_name: str) -> List[Dict[str, Any]]:

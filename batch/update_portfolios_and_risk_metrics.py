@@ -28,7 +28,7 @@ Environment variables:
     MONGODB_SRV — MongoDB connection string.
     DATABASE_NAME — Database name (defaults to ``VESTRA_PROD``).
     UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS — Seconds between polling cycles
-        (defaults to ``30``, minimum ``30``).
+        (defaults to ``60``, minimum ``30``).
     MARKET_DATA_PROVIDER — Market data provider module path
         (defaults to ``market.yfinance_provider.YFinanceProvider``).
 """
@@ -423,12 +423,12 @@ def _ensure_instruments_and_timeseries(
 
 def get_poll_interval() -> int:
     """Return the polling interval in seconds from environment."""
-    value = os.getenv("UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS", "5")
+    value = os.getenv("UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS", "60")
     try:
         interval = int(value)
-        return max(interval, 5)
+        return max(interval, 30)
     except (TypeError, ValueError):
-        return 30
+        return 60
 
 
 def _holdings_have_market_values(holdings: List[Dict[str, Any]]) -> bool:

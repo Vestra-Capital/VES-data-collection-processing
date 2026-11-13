@@ -12,20 +12,14 @@ Environment variables:
         (defaults to ``market.yfinance_provider.YFinanceProvider``).
     PRICE_POLL_INTERVAL_SECONDS — Seconds between price polls
         (defaults to ``15``).
-    MAX_PRICE_CONSECUTIVE_FAILURES — Max consecutive failures before a symbol
-        is paused for the day (defaults to ``10``). Set to ``0`` to disable.
-    PRICE_RATE_LIMIT_PAUSE_SECONDS — Seconds to pause when Yahoo Finance
-        rate-limits the request (defaults to ``60``).
 """
 
-import datetime
 import logging
 import math
 import os
 import sys
 import time
-from datetime import date
-from typing import Any, Callable, Dict, Optional, Set, Type
+from typing import Any, Callable, Dict
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -41,22 +35,6 @@ from pymongo.errors import PyMongoError
 from market.provider import MarketDataProvider
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
-
-# Try to import yfinance's rate-limit exception so we can pause longer when
-# Yahoo Finance rate-limits us. Falls back to None if yfinance isn't installed
-# or doesn't expose this exception in this version.
-try:  # pragma: no cover - depends on yfinance version
-    from yfinance.exceptions import YFRateLimitError  # type: ignore
-except Exception:  # pragma: no cover
-    YFRateLimitError: Optional[Type[BaseException]] = None
-
-
-def _is_rate_limit_error(exc: BaseException) -> bool:
-    """Return True if ``exc`` is a Yahoo Finance rate-limit error."""
-    if YFRateLimitError is not None and isinstance(exc, YFRateLimitError):
-        return True
-    message = str(exc)
-    return "Rate limited" in message or "Too Many Requests" in message
 
 
 def get_mongo_client() -> MongoClient:
@@ -123,20 +101,9 @@ def get_poll_interval() -> int:
         return 15
 
 
-def get_rate_limit_pause_seconds() -> int:
-    """Return the seconds to pause when Yahoo Finance rate-limits the request."""
-    value = os.getenv("PRICE_RATE_LIMIT_PAUSE_SECONDS", "60")
-    try:
-        return max(int(value), 1)
-    except (TypeError, ValueError):
-        return 60
-
-
 def main() -> None:
     db_name = os.getenv("DATABASE_NAME", "VESTRA_PROD")
     poll_interval = get_poll_interval()
-    max_failures = _get_max_consecutive_failures()
-    rate_limit_pause = get_rate_limit_pause_seconds()
 
     symbols = load_symbols(db_name)
     if not symbols:
@@ -145,9 +112,6 @@ def main() -> None:
 
     logger.info("Loaded %d symbol(s) from '%s.instruments'.", len(symbols), db_name)
     logger.info("Poll interval: %d seconds.", poll_interval)
-    logger.info("Rate-limit pause: %d seconds.", rate_limit_pause)
-    if max_failures > 0:
-        logger.info("Max consecutive failures before pausing a symbol: %d.", max_failures)
 
     provider = get_market_data_provider()
     logger.info("Using market data provider: %s", provider.__class__.__name__)
@@ -156,9 +120,6 @@ def main() -> None:
     logger.info("Starting price poller (Ctrl+C to stop)...")
 
     last_valid_price: Dict[str, float] = {}
-    consecutive_failures: Dict[str, int] = {}
-    paused_symbols: Set[str] = set()
-    last_reset_date: date | None = None
 
     def _is_valid_price(price: Any) -> bool:
         if not isinstance(price, (int, float)) or isinstance(price, bool):
@@ -167,105 +128,39 @@ def main() -> None:
             return False
         return price > 0
 
-    def _reset_if_new_day() -> None:
-        nonlocal last_reset_date
-        today = date.today()
-        if last_reset_date != today:
-            consecutive_failures.clear()
-            paused_symbols.clear()
-            last_reset_date = today
-            logger.info("Reset per-symbol failure counters for %s.", today.isoformat())
-
     while True:
         try:
-            _reset_if_new_day()
             prices = provider.fetch_current_prices(symbols)
-            successful_symbols = set(prices.keys())
-
-            for symbol in symbols:
-                if symbol in paused_symbols:
-                    continue
-
-                if symbol not in successful_symbols:
-                    consecutive_failures[symbol] = consecutive_failures.get(symbol, 0) + 1
-                    failures = consecutive_failures[symbol]
-                    if max_failures > 0 and failures >= max_failures:
-                        paused_symbols.add(symbol)
-                        logger.warning(
-                            "Pausing symbol %s for the day after %d consecutive failures "
-                            "(no price data).",
-                            symbol,
-                            failures,
-                        )
-                    else:
-                        remaining = max_failures - failures if max_failures > 0 else 0
-                        logger.warning(
-                            "No price data for %s (failure %d/%s).",
-                            symbol,
-                            failures,
-                            remaining if max_failures > 0 else "unlimited",
-                        )
-                    continue
-
-                price = prices[symbol]
+            for symbol, price in prices.items():
                 if not _is_valid_price(price):
-                    consecutive_failures[symbol] = consecutive_failures.get(symbol, 0) + 1
-                    failures = consecutive_failures[symbol]
-                    if max_failures > 0 and failures >= max_failures:
-                        paused_symbols.add(symbol)
+                    if symbol in last_valid_price:
                         logger.warning(
-                            "Pausing symbol %s for the day after %d consecutive failures "
-                            "(invalid price %s).",
-                            symbol,
-                            failures,
+                            "Invalid price %s for %s; falling back to previous valid price %s.",
                             price,
+                            symbol,
+                            last_valid_price[symbol],
                         )
+                        on_price(symbol, last_valid_price[symbol])
                     else:
-                        remaining = max_failures - failures if max_failures > 0 else 0
                         logger.warning(
-                            "Invalid price %s for %s (failure %d/%s).",
+                            "Skipping invalid price %s for %s (no previous valid price).",
                             price,
                             symbol,
-                            failures,
-                            remaining if max_failures > 0 else "unlimited",
                         )
                     continue
-
                 on_price(symbol, price)
                 last_valid_price[symbol] = price
-                consecutive_failures[symbol] = 0
-
         except KeyboardInterrupt:
             logger.info("Interrupted; shutting down.")
             break
         except Exception as e:
             logger.error("Poll error: %s", e, exc_info=True)
-            if _is_rate_limit_error(e):
-                logger.warning(
-                    "Yahoo Finance rate-limited the request; pausing %ds before retrying.",
-                    rate_limit_pause,
-                )
-                try:
-                    time.sleep(rate_limit_pause)
-                except KeyboardInterrupt:
-                    logger.info("Interrupted; shutting down.")
-                    break
-                continue
 
         try:
             time.sleep(poll_interval)
         except KeyboardInterrupt:
             logger.info("Interrupted; shutting down.")
             break
-
-
-def _get_max_consecutive_failures() -> int:
-    """Return the max consecutive failures before pausing a symbol for the day."""
-    value = os.getenv("MAX_PRICE_CONSECUTIVE_FAILURES", "10")
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 10
 
 
 if __name__ == "__main__":

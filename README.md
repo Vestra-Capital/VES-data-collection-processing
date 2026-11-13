@@ -928,7 +928,7 @@ python batch/daily_consolidation.py
 - `MONGODB_SRV` — MongoDB connection string.
 - `DATABASE_NAME` — Database name (defaults to `VESTRA_PROD`).
 - `MARKET_DATA_PROVIDER` — Market data provider module path (defaults to `market.yfinance_provider.YFinanceProvider`).
-- `PRICE_POLL_INTERVAL_SECONDS` — Seconds between price polls (defaults to `15`, minimum `10`).
+- `PRICE_POLL_INTERVAL_SECONDS` — Seconds between price polls (defaults to `60`, minimum `10`).
 
 ---
 
@@ -1105,7 +1105,7 @@ DATABASE_NAME=VESTRA_PROD
 # Market Data Provider
 # ===========================================
 MARKET_DATA_PROVIDER=market.yfinance_provider.YFinanceProvider
-PRICE_POLL_INTERVAL_SECONDS=15
+PRICE_POLL_INTERVAL_SECONDS=60
 
 # ===========================================
 # Fees Reporting
@@ -1121,7 +1121,7 @@ BREVO_EMAIL_SENDER=team@vestracapital.com.au
 # ===========================================
 # Portfolio / Risk Metrics Updater (daemon)
 # ===========================================
-UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS=300
+UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS=60
 
 # ===========================================
 # Pending Prospects Email (optional)
@@ -1140,7 +1140,8 @@ COLLECTION_NAME=prospects
 | `DATABASE_NAME` | No | `VESTRA_PROD` | Target MongoDB database name. |
 | `MARKET_DATA_PROVIDER` | No | `market.yfinance_provider.YFinanceProvider` | Dotted import path for the market data provider class. |
 | `PRICE_POLL_INTERVAL_SECONDS` | No | `15` | Seconds between price polls for `batch/price_streamer.py`. Minimum is 10. |
-| `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` | No | `300` | Seconds between polling cycles for `batch/update_portfolios_and_risk_metrics.py`. Minimum is 60. |
+| `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` | No | `60` | Seconds between polling cycles for `batch/update_portfolios_and_risk_metrics.py`. Minimum is 30. |
+| `MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS` | No | `120` | Seconds between polling cycles for `batch/monitor_instruments.py`. Minimum is 60. |
 | `FEES_REPORT_RATE` | No | `1.5` | Annual fee rate as a percentage for fees reporting. |
 | `COLLECTION_NAME` | No | `prospects` | Target MongoDB collection name for the pending-prospects script. |
 | `BREVO_API_KEY` | **Yes** | — | Brevo API key for transactional email. |
@@ -1372,7 +1373,7 @@ python batch/price_streamer.py
 - Runs until interrupted (Ctrl+C).
 
 **Environment variables:**
-- `PRICE_POLL_INTERVAL_SECONDS` — Seconds between price polls (defaults to `15`, minimum `10`).
+- `PRICE_POLL_INTERVAL_SECONDS` — Seconds between price polls (defaults to `60`, minimum `10`).
 
 ### 14. Start Portfolio / Risk Updater Daemon
 
@@ -1394,7 +1395,8 @@ python batch/update_portfolios_and_risk_metrics.py
 - Runs until interrupted (Ctrl+C).
 
 **Environment variables:**
-- `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` — Seconds between polling cycles (defaults to `300`, minimum `60`).
+- `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` — Seconds between polling cycles (defaults to `60`, minimum `30`).
+- `MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS` — Seconds between polling cycles (defaults to `120`, minimum `60`).
 
 ---
 
@@ -1570,7 +1572,7 @@ Or use a workflow orchestrator such as:
 - **Prefect** — for modern Python-native orchestration.
 - **GitHub Actions** — for scheduled CI runs.
 
-Alternatively, run `batch/update_portfolios_and_risk_metrics.py` as a long-lived daemon on a host or container. It polls indefinitely on the interval configured by `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` (default: 300 seconds).
+Alternatively, run `batch/update_portfolios_and_risk_metrics.py` as a long-lived daemon on a host or container. It polls indefinitely on the interval configured by `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` (default: 60 seconds).
 
 ---
 
@@ -1679,14 +1681,11 @@ Optional variables (used by the daemon workers):
 |----------|-------------|---------|
 | `MARKET_DATA_PROVIDER` | Market data provider module path | `market.yfinance_provider.YFinanceProvider` |
 | `PRICE_POLL_INTERVAL_SECONDS` | Seconds between price polls | `15` |
-| `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` | Seconds between portfolio/risk update cycles | `300` |
+| `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` | Seconds between portfolio/risk update cycles | `60` |
+| `MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS` | Seconds between instrument monitoring cycles | `120` |
 | `SKIP_WEEKENDS` | Set to `"false"` to run daemons on Saturday/Sunday too (default: `"true"`) | `true` |
-| `MAX_PRICE_CONSECUTIVE_FAILURES` | Max consecutive failures before pausing a symbol for the day (set to `0` to disable) | `10` |
-| `PRICE_RATE_LIMIT_PAUSE_SECONDS` | Seconds to pause when Yahoo Finance rate-limits the request | `60` |
 
 > **Weekend behavior:** By default (`SKIP_WEEKENDS=true`), the daemon worker checks the day before starting. If it's Saturday or Sunday, or Monday before 08:00 Australia/Sydney time, it sleeps until Monday 08:00 Sydney time (re-checking hourly) and only starts the daemons within the operating window. This stops all three daemon loops (price streaming, instrument monitoring, portfolio/risk updates) from running over the weekend and before Monday 08:00 Sydney time. Set `SKIP_WEEKENDS=false` to run 7 days a week.
->
-> **Rate-limit behavior:** If Yahoo Finance returns a rate-limit error (`Too Many Requests`), the price streamer pauses for `PRICE_RATE_LIMIT_PAUSE_SECONDS` (default `60`) seconds before retrying, instead of the normal poll interval. This avoids hammering Yahoo Finance while rate-limited. Set `PRICE_RATE_LIMIT_PAUSE_SECONDS` to adjust the pause duration.
 
 Render Cron Jobs and Background Workers require a **Starter plan or higher**
 (free tier is not supported). All schedules are in **UTC**. Trigger manual runs
@@ -1743,7 +1742,7 @@ Create one **`daemon-worker`** Background Worker:
 - Type: Background Worker
 - Build command: `pip install -r requirements.txt`
 - Start command: `python batch/daemon_worker.py`
-- Env vars: `MONGODB_SRV`, `DATABASE_NAME`, `MORRISON_ACCESS_KEY`, `MORRISON_API_BASE_URL`, `MARKET_DATA_PROVIDER`, `PRICE_POLL_INTERVAL_SECONDS`, `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS`, `MAX_PRICE_CONSECUTIVE_FAILURES`, `PRICE_RATE_LIMIT_PAUSE_SECONDS`
+- Env vars: `MONGODB_SRV`, `DATABASE_NAME`, `MORRISON_ACCESS_KEY`, `MORRISON_API_BASE_URL`, `MARKET_DATA_PROVIDER`, `PRICE_POLL_INTERVAL_SECONDS`, `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS`
 
 This runs all three daemon loops (`monitor_instruments`, `update_portfolios_and_risk_metrics`, `price_streamer`) concurrently in one Render service via threads. One Background Worker bill instead of three.
 
@@ -1768,7 +1767,7 @@ both would run the same daemons concurrently):
    - Type: Background Worker
    - Build command: `pip install -r requirements.txt`
    - Start command: `python batch/price_streamer.py`
-   - Env vars: `MONGODB_SRV`, `DATABASE_NAME`, `MARKET_DATA_PROVIDER`, `PRICE_POLL_INTERVAL_SECONDS`, `MAX_PRICE_CONSECUTIVE_FAILURES`, `PRICE_RATE_LIMIT_PAUSE_SECONDS`
+   - Env vars: `MONGODB_SRV`, `DATABASE_NAME`, `MARKET_DATA_PROVIDER`, `PRICE_POLL_INTERVAL_SECONDS`
 
 ### Typical Schedule
 
