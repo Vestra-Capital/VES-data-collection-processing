@@ -11,7 +11,7 @@ Environment variables:
     MARKET_DATA_PROVIDER — Market data provider module path
         (defaults to ``market.yfinance_provider.YFinanceProvider``).
     PRICE_POLL_INTERVAL_SECONDS — Seconds between price polls
-        (defaults to ``60``).
+        (defaults to ``15``).
     PRICE_BATCH_SIZE — Max number of symbols per yfinance batch
         (defaults to ``100``).
     PRICE_BATCH_DELAY_SECONDS — Seconds to wait between batches
@@ -97,12 +97,12 @@ def get_market_data_provider() -> MarketDataProvider:
 
 def get_poll_interval() -> int:
     """Return the polling interval in seconds from environment."""
-    value = os.getenv("PRICE_POLL_INTERVAL_SECONDS", "60")
+    value = os.getenv("PRICE_POLL_INTERVAL_SECONDS", "15")
     try:
         interval = int(value)
-        return max(interval, 30)
+        return max(interval, 10)
     except (TypeError, ValueError):
-        return 60
+        return 15
 
 
 def get_batch_size() -> int:
