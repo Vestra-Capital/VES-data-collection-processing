@@ -45,13 +45,18 @@
 # =============================================================================
 name: Monitor Instruments
 
-on:
-  push:
-    branches:
-      - main
-  schedule:
-    - cron: '0 */4 * * *'
-  workflow_dispatch:
+# =============================================================================
+# DISABLED — Replaced by Render Background Worker "daemon-worker"
+# (batch/daemon_worker.py). Runs monitor_instruments concurrently with the other
+# daemons in a single Background Worker service via Render instead.
+# =============================================================================
+# on:
+#   push:
+#     branches:
+#       - main
+#   schedule:
+#     - cron: '0 */4 * * *'
+#   workflow_dispatch:
 
 jobs:
   monitor:

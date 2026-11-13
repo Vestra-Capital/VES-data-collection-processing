@@ -68,12 +68,16 @@
 
 name: Data Collection
 
-on:
-  schedule:
-    # Run every hour at minute 0 (UTC). Cron format: minute hour day month weekday.
-    - cron: '0 * * * *'
-  # Allow manual triggering from the GitHub Actions UI.
-  workflow_dispatch:
+# =============================================================================
+# DISABLED — Replaced by Render Cron Job "data-collection" (render.yaml).
+# Runs batch/data_collection.py hourly at :00 UTC via Render instead.
+# =============================================================================
+# on:
+#   schedule:
+#     # Run every hour at minute 0 (UTC). Cron format: minute hour day month weekday.
+#     - cron: '0 * * * *'
+#   # Allow manual triggering from the GitHub Actions UI.
+#   workflow_dispatch:
 
 jobs:
   collect-data:

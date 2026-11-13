@@ -65,13 +65,18 @@
 # =============================================================================
 name: Update Portfolios and Risk Metrics
 
-on:
-  push:
-    branches:
-      - main
-  schedule:
-    - cron: '0 */4 * * *'   # Every 4 hours at minute 0 (UTC)
-  workflow_dispatch:        # Manual trigger from the GitHub Actions tab
+# =============================================================================
+# DISABLED — Replaced by Render Background Worker "daemon-worker"
+# (batch/daemon_worker.py). Runs update_portfolios_and_risk_metrics concurrently
+# with the other daemons in a single Background Worker service via Render instead.
+# =============================================================================
+# on:
+#   push:
+#     branches:
+#       - main
+#   schedule:
+#     - cron: '0 */4 * * *'   # Every 4 hours at minute 0 (UTC)
+#   workflow_dispatch:        # Manual trigger from the GitHub Actions tab
 
 jobs:
   backfill:

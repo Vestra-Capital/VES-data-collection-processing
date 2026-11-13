@@ -1,3 +1,9 @@
+# =============================================================================
+# DISABLED — Replaced by Render Background Worker "daemon-worker"
+# (batch/daemon_worker.py). Runs price_streamer concurrently with the other
+# daemons in a single Background Worker service via Render instead.
+# =============================================================================
+
 name: Update Instrument Prices
 
 # Job summary:
@@ -31,12 +37,12 @@ name: Update Instrument Prices
 #                                for `PRICE_POLL_INTERVAL_SECONDS` between polls
 #                                until interrupted (the workflow timeout ends it).
 
-on:
-  push:
-    branches:
-      - main
-  schedule:
-    - cron: '0 */4 * * *'
+# on:
+#   push:
+#     branches:
+#       - main
+#   schedule:
+#     - cron: '0 */4 * * *'
 
 jobs:
   update-prices:
