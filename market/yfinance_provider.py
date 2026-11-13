@@ -55,7 +55,15 @@ class YFinanceProvider(MarketDataProvider):
                 raise RuntimeError("Empty yfinance download result — possible rate limit")
             return data
 
-        data = retry_on_429(_download_with_retry)
+        try:
+            data = retry_on_429(_download_with_retry)
+        except Exception as exc:
+            logger.warning(
+                "yfinance download failed for %d symbol(s) after retries: %s",
+                len(symbols),
+                exc,
+            )
+            return {}
 
         if data.empty:
             return {}
