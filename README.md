@@ -1634,25 +1634,26 @@ The repository includes two GitHub Actions workflows for automated execution of 
 
 ## Render Deployment
 
-This repository includes a `render.yaml` that defines Render Background Worker
-services for the daemon scripts. It replaces the daemon portions of the
-GitHub Actions workflows (`monitor_instruments.yml`,
+Render does **not** support Cron Jobs or Background Workers via `render.yaml`
+(Blueprint only supports `webService` and database resources). All scheduled
+and daemon resources must be created manually in the Render dashboard. This
+section documents how to set them up, replacing the GitHub Actions workflows
+(`daily_consolidation.yml`, `data_collection.yml`, `monitor_instruments.yml`,
 `update_portfolios_and_risk_metrics.yml`, `update_prices.yml`).
 
 ### Overview
 
 | Render Resource | Type | Schedule | Script | Purpose |
 |-----------------|------|----------|--------|---------|
-| `daily-consolidation` | Cron Job (manual) | Daily `0 9 * * *` (09:00 UTC) | `batch/daily_consolidation.py` | Full fees reporting pipeline |
-| `data-collection` | Cron Job (manual) | Hourly `0 * * * *` (:00 UTC) | `batch/data_collection.py` | Core data collection |
-| `monitor-instruments` | Background Worker (in `render.yaml`) | Continuous daemon | `batch/monitor_instruments.py` | Detects new instruments and enriches them |
-| `update-portfolios-risk` | Background Worker (in `render.yaml`) | Continuous daemon | `batch/update_portfolios_and_risk_metrics.py` | Maintains NAV timeseries and risk metrics |
-| `update-prices` | Background Worker (in `render.yaml`) | Continuous daemon | `batch/price_streamer.py` | Polls current instrument prices |
+| `daily-consolidation` | Cron Job | Daily `0 9 * * *` (09:00 UTC) | `batch/daily_consolidation.py` | Full fees reporting pipeline |
+| `data-collection` | Cron Job | Hourly `0 * * * *` (:00 UTC) | `batch/data_collection.py` | Core data collection |
+| `monitor-instruments` | Background Worker | Continuous daemon | `batch/monitor_instruments.py` | Detects new instruments and enriches them |
+| `update-portfolios-risk` | Background Worker | Continuous daemon | `batch/update_portfolios_and_risk_metrics.py` | Maintains NAV timeseries and risk metrics |
+| `update-prices` | Background Worker | Continuous daemon | `batch/price_streamer.py` | Polls current instrument prices |
 
-**Important:** Render Blueprint (`render.yaml`) does **NOT** support Cron Jobs.
-Cron Jobs (`daily-consolidation`, `data-collection`) must be created manually
-in the Render dashboard under **Cron Jobs**. The three daemon scripts are
-defined as Background Worker services in `render.yaml`.
+The two Cron Jobs (`daily-consolidation`, `data-collection`) run once and exit.
+The three Background Workers (`monitor-instruments`, `update-portfolios-risk`,
+`update-prices`) run infinite polling loops and stay alive continuously.
 
 ### Prerequisites
 
@@ -1681,10 +1682,10 @@ from the Render dashboard anytime (replaces `workflow_dispatch`).
 ### Step 1: Connect the repository to Render
 
 1. Log in to the [Render dashboard](https://dashboard.render.com/).
-2. Click **"New +"** → **"Blueprint"** (or connect your repository directly).
-3. Select this repository (`VES-data-collection-processing`).
-4. Render detects `render.yaml` and proposes the three Background Worker
-   services.
+2. Click **"New +"** and connect this repository (`VES-data-collection-processing`).
+3. Render may detect a `render.yaml` — if present, remove any `cronJobs` or
+   `backgroundWorker` entries (they are not supported by Blueprint). It is safe
+   to not use `render.yaml` at all and create resources manually.
 
 ### Step 2: Add environment variables
 
@@ -1699,10 +1700,9 @@ MORRISON_API_BASE_URL=https://api.morrison.fortrez.com.au
 
 Use **Secret Files** or **Environment Variables** (not plain text in code).
 
-### Step 3: Create the Cron Jobs manually
+### Step 3: Create the Cron Jobs
 
-Render does not support Cron Jobs in `render.yaml`. Create them manually in the
-Render dashboard under **Cron Jobs**:
+Create these manually in the Render dashboard under **Cron Jobs**:
 
 1. **`daily-consolidation`**
    - Type: Cron Job
@@ -1720,9 +1720,8 @@ Render dashboard under **Cron Jobs**:
 
 ### Step 4: Create the Background Worker daemons
 
-The three daemon scripts are defined in `render.yaml` as Background Worker
-services. Render will propose them when you connect the repository via Blueprint.
-Alternatively, create them manually in the Render dashboard:
+Create these manually in the Render dashboard as **Background Worker** services
+(do not combine with cron jobs — both would run the same daemon concurrently):
 
 1. **`monitor-instruments`**
    - Type: Background Worker
@@ -1742,28 +1741,6 @@ Alternatively, create them manually in the Render dashboard:
    - Start command: `python batch/price_streamer.py`
    - Env vars: `MONGODB_SRV`, `DATABASE_NAME`, `MARKET_DATA_PROVIDER`, `PRICE_POLL_INTERVAL_SECONDS`
 
-### render.yaml Reference
-
-The `render.yaml` at the repository root defines the three Background Worker
-services:
-
-```yaml
-services:
-  - type: backgroundWorker
-    name: monitor-instruments
-    env: python
-    ...
-    startCommand: python batch/monitor_instruments.py
-  - type: backgroundWorker
-    name: update-portfolios-risk
-    ...
-    startCommand: python batch/update_portfolios_and_risk_metrics.py
-  - type: backgroundWorker
-    name: update-prices
-    ...
-    startCommand: python batch/price_streamer.py
-```
-
 ### Typical Schedule
 
 | Resource | UTC Schedule | Local (approx.) |
@@ -1776,9 +1753,6 @@ standard 5-field format: `minute hour day month weekday`.
 
 ### Troubleshooting
 
-- **Blueprint rejects render.yaml:** Remove any `cronJobs` or `spec_version`
-  keys — Render Blueprint only supports `services`, `databases`, etc. Cron Jobs
-  must be created manually in the dashboard.
 - **Cron job fails immediately:** Check that all 4 required environment
   variables are set for that resource. View logs in the Render dashboard.
 - **Python version mismatch:** Add a `runtime.txt` file at the repo root
@@ -1787,6 +1761,8 @@ standard 5-field format: `minute hour day month weekday`.
   Worker, not a Cron Job. Cron Jobs exit after completion.
 - **Missing instruments/prices:** Verify `MARKET_DATA_PROVIDER` is set and
   the provider can reach external APIs (network access).
+- **Blueprint errors:** If you added a `render.yaml`, remove it or strip out
+  `cronJobs`/`backgroundWorker` keys — Render Blueprint does not support them.
 
 ---
 
