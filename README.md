@@ -1682,8 +1682,11 @@ Optional variables (used by the daemon workers):
 | `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` | Seconds between portfolio/risk update cycles | `300` |
 | `SKIP_WEEKENDS` | Set to `"false"` to run daemons on Saturday/Sunday too (default: `"true"`) | `true` |
 | `MAX_PRICE_CONSECUTIVE_FAILURES` | Max consecutive failures before pausing a symbol for the day (set to `0` to disable) | `10` |
+| `PRICE_RATE_LIMIT_PAUSE_SECONDS` | Seconds to pause when Yahoo Finance rate-limits the request | `60` |
 
 > **Weekend behavior:** By default (`SKIP_WEEKENDS=true`), the daemon worker checks the day before starting. If it's Saturday or Sunday, or Monday before 08:00 Australia/Sydney time, it sleeps until Monday 08:00 Sydney time (re-checking hourly) and only starts the daemons within the operating window. This stops all three daemon loops (price streaming, instrument monitoring, portfolio/risk updates) from running over the weekend and before Monday 08:00 Sydney time. Set `SKIP_WEEKENDS=false` to run 7 days a week.
+>
+> **Rate-limit behavior:** If Yahoo Finance returns a rate-limit error (`Too Many Requests`), the price streamer pauses for `PRICE_RATE_LIMIT_PAUSE_SECONDS` (default `60`) seconds before retrying, instead of the normal poll interval. This avoids hammering Yahoo Finance while rate-limited. Set `PRICE_RATE_LIMIT_PAUSE_SECONDS` to adjust the pause duration.
 
 Render Cron Jobs and Background Workers require a **Starter plan or higher**
 (free tier is not supported). All schedules are in **UTC**. Trigger manual runs
@@ -1740,7 +1743,7 @@ Create one **`daemon-worker`** Background Worker:
 - Type: Background Worker
 - Build command: `pip install -r requirements.txt`
 - Start command: `python batch/daemon_worker.py`
-- Env vars: `MONGODB_SRV`, `DATABASE_NAME`, `MORRISON_ACCESS_KEY`, `MORRISON_API_BASE_URL`, `MARKET_DATA_PROVIDER`, `PRICE_POLL_INTERVAL_SECONDS`, `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS`, `MAX_PRICE_CONSECUTIVE_FAILURES`
+- Env vars: `MONGODB_SRV`, `DATABASE_NAME`, `MORRISON_ACCESS_KEY`, `MORRISON_API_BASE_URL`, `MARKET_DATA_PROVIDER`, `PRICE_POLL_INTERVAL_SECONDS`, `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS`, `MAX_PRICE_CONSECUTIVE_FAILURES`, `PRICE_RATE_LIMIT_PAUSE_SECONDS`
 
 This runs all three daemon loops (`monitor_instruments`, `update_portfolios_and_risk_metrics`, `price_streamer`) concurrently in one Render service via threads. One Background Worker bill instead of three.
 
@@ -1765,7 +1768,7 @@ both would run the same daemons concurrently):
    - Type: Background Worker
    - Build command: `pip install -r requirements.txt`
    - Start command: `python batch/price_streamer.py`
-   - Env vars: `MONGODB_SRV`, `DATABASE_NAME`, `MARKET_DATA_PROVIDER`, `PRICE_POLL_INTERVAL_SECONDS`, `MAX_PRICE_CONSECUTIVE_FAILURES`
+   - Env vars: `MONGODB_SRV`, `DATABASE_NAME`, `MARKET_DATA_PROVIDER`, `PRICE_POLL_INTERVAL_SECONDS`, `MAX_PRICE_CONSECUTIVE_FAILURES`, `PRICE_RATE_LIMIT_PAUSE_SECONDS`
 
 ### Typical Schedule
 

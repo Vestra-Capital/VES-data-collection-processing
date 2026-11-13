@@ -14,6 +14,8 @@ Environment variables:
         (defaults to ``15``).
     MAX_PRICE_CONSECUTIVE_FAILURES — Max consecutive failures before a symbol
         is paused for the day (defaults to ``10``). Set to ``0`` to disable.
+    PRICE_RATE_LIMIT_PAUSE_SECONDS — Seconds to pause when Yahoo Finance
+        rate-limits the request (defaults to ``60``).
 """
 
 import datetime
@@ -23,7 +25,7 @@ import os
 import sys
 import time
 from datetime import date
-from typing import Any, Callable, Dict, Set
+from typing import Any, Callable, Dict, Optional, Set, Type
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -39,6 +41,22 @@ from pymongo.errors import PyMongoError
 from market.provider import MarketDataProvider
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+
+# Try to import yfinance's rate-limit exception so we can pause longer when
+# Yahoo Finance rate-limits us. Falls back to None if yfinance isn't installed
+# or doesn't expose this exception in this version.
+try:  # pragma: no cover - depends on yfinance version
+    from yfinance.exceptions import YFRateLimitError  # type: ignore
+except Exception:  # pragma: no cover
+    YFRateLimitError: Optional[Type[BaseException]] = None
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    """Return True if ``exc`` is a Yahoo Finance rate-limit error."""
+    if YFRateLimitError is not None and isinstance(exc, YFRateLimitError):
+        return True
+    message = str(exc)
+    return "Rate limited" in message or "Too Many Requests" in message
 
 
 def get_mongo_client() -> MongoClient:
@@ -105,10 +123,20 @@ def get_poll_interval() -> int:
         return 15
 
 
+def get_rate_limit_pause_seconds() -> int:
+    """Return the seconds to pause when Yahoo Finance rate-limits the request."""
+    value = os.getenv("PRICE_RATE_LIMIT_PAUSE_SECONDS", "60")
+    try:
+        return max(int(value), 1)
+    except (TypeError, ValueError):
+        return 60
+
+
 def main() -> None:
     db_name = os.getenv("DATABASE_NAME", "VESTRA_PROD")
     poll_interval = get_poll_interval()
     max_failures = _get_max_consecutive_failures()
+    rate_limit_pause = get_rate_limit_pause_seconds()
 
     symbols = load_symbols(db_name)
     if not symbols:
@@ -117,6 +145,7 @@ def main() -> None:
 
     logger.info("Loaded %d symbol(s) from '%s.instruments'.", len(symbols), db_name)
     logger.info("Poll interval: %d seconds.", poll_interval)
+    logger.info("Rate-limit pause: %d seconds.", rate_limit_pause)
     if max_failures > 0:
         logger.info("Max consecutive failures before pausing a symbol: %d.", max_failures)
 
@@ -211,6 +240,17 @@ def main() -> None:
             break
         except Exception as e:
             logger.error("Poll error: %s", e, exc_info=True)
+            if _is_rate_limit_error(e):
+                logger.warning(
+                    "Yahoo Finance rate-limited the request; pausing %ds before retrying.",
+                    rate_limit_pause,
+                )
+                try:
+                    time.sleep(rate_limit_pause)
+                except KeyboardInterrupt:
+                    logger.info("Interrupted; shutting down.")
+                    break
+                continue
 
         try:
             time.sleep(poll_interval)
