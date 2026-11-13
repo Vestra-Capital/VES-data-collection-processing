@@ -1,0 +1,65 @@
+# render.yaml — Render Cron Jobs
+# Replaces .github/workflows/daily_consolidation.yml and
+# .github/workflows/data_collection.yml.
+#
+#   daily-consolidation -> batch/daily_consolidation.py   every day at 09:00 UTC
+#   data-collection      -> batch/data_collection.py      every hour at minute 0 (UTC)
+#
+# Excluded from cron jobs (infinite daemon loops — Render Cron Jobs expect the
+# command to exit, so these would run until killed):
+#   - monitor-instruments        -> batch/monitor_instruments.py
+#   - update-portfolios-risk     -> batch/update_portfolios_and_risk_metrics.py
+#   - update-prices              -> batch/price_streamer.py
+# Run these as Background Worker services in the Render dashboard instead:
+#   Build command:  pip install -r requirements.txt
+#   Start command:  python batch/<script>.py
+#   Env vars:       MONGODB_SRV, DATABASE_NAME, MORRISON_ACCESS_KEY,
+#                   MORRISON_API_BASE_URL
+#   (update-portfolios-risk also reads UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS
+#    and MARKET_DATA_PROVIDER. update-prices also reads MARKET_DATA_PROVIDER
+#    and PRICE_POLL_INTERVAL_SECONDS.)
+#
+# Prerequisites in the Render dashboard (Environment tab) BEFORE creating
+# resources — add these as environment variables (do NOT commit them):
+#   MONGODB_SRV
+#   DATABASE_NAME
+#   MORRISON_ACCESS_KEY
+#   MORRISON_API_BASE_URL
+#
+# Note: Render Cron Jobs and Background Workers are not available on the free
+# tier (Starter+ required). All times are UTC. Trigger manual runs from the
+# Render dashboard anytime (replaces workflow_dispatch).
+
+cronJobs:
+  - name: daily-consolidation
+    schedule: "0 9 * * *"
+    region: oregon
+    plan: starter
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python batch/daily_consolidation.py
+    envVars:
+      - key: MONGODB_SRV
+        fromSecret: MONGODB_SRV
+      - key: DATABASE_NAME
+        fromSecret: DATABASE_NAME
+      - key: MORRISON_ACCESS_KEY
+        fromSecret: MORRISON_ACCESS_KEY
+      - key: MORRISON_API_BASE_URL
+        fromSecret: MORRISON_API_BASE_URL
+  - name: data-collection
+    schedule: "0 * * * *"
+    region: oregon
+    plan: starter
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python batch/data_collection.py
+    envVars:
+      - key: MONGODB_SRV
+        fromSecret: MONGODB_SRV
+      - key: DATABASE_NAME
+        fromSecret: DATABASE_NAME
+      - key: MORRISON_ACCESS_KEY
+        fromSecret: MORRISON_ACCESS_KEY
+      - key: MORRISON_API_BASE_URL
+        fromSecret: MORRISON_API_BASE_URL

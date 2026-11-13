@@ -1631,6 +1631,150 @@ The repository includes two GitHub Actions workflows for automated execution of 
 | `update_portfolios_and_risk_metrics.yml` | Push + Schedule + Manual | Every 4 hours + on push to `main` | `batch/update_portfolios_and_risk_metrics.py` (long-lived daemon) |
 | `daily_consolidation.yml` | Schedule + Manual | Daily at 9 AM UTC | `batch/daily_consolidation.py` |
 
+## Render Deployment
+
+This repository includes a `render.yaml` that defines Render Cron Jobs and
+Background Worker services for running the VES data-collection pipeline on a
+schedule, replacing the GitHub Actions workflows.
+
+### Overview
+
+| Render Resource | Schedule / Type | Script | Purpose |
+|-----------------|-----------------|--------|---------|
+| `daily-consolidation` | Cron Job — daily `0 9 * * *` (09:00 UTC) | `batch/daily_consolidation.py` | Full fees reporting pipeline (accounts → holdings → cash → instruments → timeseries → NAV → AUM) |
+| `data-collection` | Cron Job — hourly `0 * * * *` (:00 UTC) | `batch/data_collection.py` | Core data collection (accounts, holdings, cash balances, trades history) |
+| `monitor-instruments` | Background Worker (daemon) | `batch/monitor_instruments.py` | Detects new instruments in portfolios and enriches them with metadata |
+| `update-portfolios-risk` | Background Worker (daemon) | `batch/update_portfolios_and_risk_metrics.py` | Maintains NAV timeseries and risk metrics, creates missing fees documents |
+| `update-prices` | Background Worker (daemon) | `batch/price_streamer.py` | Polls current instrument prices and upserts `currentPrice` into MongoDB |
+
+**Note:** Cron Jobs expect the command to exit after completing. The three daemon
+scripts (`monitor_instruments.py`, `update_portfolios_and_risk_metrics.py`,
+`price_streamer.py`) run infinite polling loops, so they are deployed as
+**Background Worker** services instead of Cron Jobs.
+
+### Prerequisites
+
+Before creating any Render resources, add these environment variables in the
+Render dashboard (Environment tab) — do **NOT** commit them to version control:
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `MONGODB_SRV` | MongoDB connection string (SRV format) | Yes |
+| `DATABASE_NAME` | Target MongoDB database (default: `VESTRA_PROD`) | Yes |
+| `MORRISON_ACCESS_KEY` | Morrison Securities API access key | Yes |
+| `MORRISON_API_BASE_URL` | Morrison API base URL | Yes |
+
+Optional variables (used by the daemon workers):
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MARKET_DATA_PROVIDER` | Market data provider module path | `market.yfinance_provider.YFinanceProvider` |
+| `PRICE_POLL_INTERVAL_SECONDS` | Seconds between price polls | `60` |
+| `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` | Seconds between portfolio/risk update cycles | `300` |
+
+Render Cron Jobs and Background Workers require a **Starter plan or higher**
+(free tier is not supported). All schedules are in **UTC**. Trigger manual runs
+from the Render dashboard anytime (replaces `workflow_dispatch`).
+
+### Step 1: Connect the repository to Render
+
+1. Log in to the [Render dashboard](https://dashboard.render.com/).
+2. Click **"New +"** → **"Blueprint"** (or connect your repository directly).
+3. Select this repository (`VES-data-collection-processing`).
+4. Render detects `render.yaml` and proposes the Cron Jobs.
+
+### Step 2: Add environment variables
+
+In the Render dashboard, go to each resource's **Environment** tab and add:
+
+```
+MONGODB_SRV=<your-mongodb-connection-string>
+DATABASE_NAME=VESTRA_PROD
+MORRISON_ACCESS_KEY=<your-morrison-api-key>
+MORRISON_API_BASE_URL=https://api.morrison.fortrez.com.au
+```
+
+Use **Secret Files** or **Environment Variables** (not plain text in code).
+
+### Step 3: Create the Cron Jobs
+
+From `render.yaml`, Render will create:
+
+1. **`daily-consolidation`** — Cron Job, schedule `0 9 * * *`
+   - Build command: `pip install -r requirements.txt`
+   - Start command: `python batch/daily_consolidation.py`
+
+2. **`data-collection`** — Cron Job, schedule `0 * * * *`
+   - Build command: `pip install -r requirements.txt`
+   - Start command: `python batch/data_collection.py`
+
+Verify each cron job appears in the Render dashboard under **Cron Jobs** and
+check the schedule matches your expectations.
+
+### Step 4: Create the Background Worker daemons
+
+Create these manually in the Render dashboard as **Background Worker** services
+(do not combine with the cron jobs — both would run the same daemon
+concurrently):
+
+1. **`monitor-instruments-worker`**
+   - Build command: `pip install -r requirements.txt`
+   - Start command: `python batch/monitor_instruments.py`
+   - Environment: `MONGODB_SRV`, `DATABASE_NAME`, `MORRISON_ACCESS_KEY`, `MORRISON_API_BASE_URL`
+
+2. **`update-portfolios-risk-worker`**
+   - Build command: `pip install -r requirements.txt`
+   - Start command: `python batch/update_portfolios_and_risk_metrics.py`
+   - Environment: `MONGODB_SRV`, `DATABASE_NAME`, `MORRISON_ACCESS_KEY`, `MORRISON_API_BASE_URL`, `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS`, `MARKET_DATA_PROVIDER`
+
+3. **`update-prices-worker`**
+   - Build command: `pip install -r requirements.txt`
+   - Start command: `python batch/price_streamer.py`
+   - Environment: `MONGODB_SRV`, `DATABASE_NAME`, `MARKET_DATA_PROVIDER`, `PRICE_POLL_INTERVAL_SECONDS`
+
+### render.yaml Reference
+
+The `render.yaml` at the repository root defines the two Cron Jobs:
+
+```yaml
+cronJobs:
+  - name: daily-consolidation
+    schedule: "0 9 * * *"
+    ...
+    startCommand: python batch/daily_consolidation.py
+  - name: data-collection
+    schedule: "0 * * * *"
+    ...
+    startCommand: python batch/data_collection.py
+```
+
+The three daemon scripts are intentionally **not** defined in `render.yaml`
+because Render Cron Jobs cannot host infinite loops. Create them as Background
+Worker services manually as described above.
+
+### Typical Schedule
+
+| Resource | UTC Schedule | Local (approx.) |
+|----------|--------------|-----------------|
+| `data-collection` | Every hour at :00 | Continuous fresh data |
+| `daily-consolidation` | Daily 09:00 UTC | Overnight/early morning fees reporting |
+
+Adjust schedules in `render.yaml` or the Render dashboard as needed. Cron
+expressions use standard 5-field format: `minute hour day month weekday`.
+
+### Troubleshooting
+
+- **Cron job fails immediately:** Check that all 4 required environment
+  variables are set for that resource. View logs in the Render dashboard.
+- **Python version mismatch:** Add a `runtime.txt` file at the repo root
+  containing `python-3.12` to pin the Python version.
+- **Daemon not running continuously:** Ensure the resource is a Background
+  Worker, not a Cron Job. Cron Jobs exit after completion.
+- **Missing instruments/prices:** Verify `MARKET_DATA_PROVIDER` is set and
+  the provider can reach external APIs (network access).
+
+---
+
 ## License
 
 Proprietary — Vestra Capital
