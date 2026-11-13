@@ -7,10 +7,13 @@ Finance rate limits on Render.
 
 from typing import Any, Dict, List
 
+import logging
 import yfinance as yf
 
 from market.provider import MarketDataProvider
 from market.yfinance_session import retry_on_429
+
+logger = logging.getLogger(__name__)
 
 
 class YFinanceProvider(MarketDataProvider):
