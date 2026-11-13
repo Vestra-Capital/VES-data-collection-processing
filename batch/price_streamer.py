@@ -13,7 +13,7 @@ Environment variables:
     PRICE_POLL_INTERVAL_SECONDS — Seconds between price polls
         (defaults to ``60``).
     PRICE_BATCH_SIZE — Max number of symbols per yfinance batch
-        (defaults to ``30``).
+        (defaults to ``2``).
     PRICE_BATCH_DELAY_SECONDS — Seconds to wait between batches
         (defaults to ``5``).
 """
@@ -107,12 +107,12 @@ def get_poll_interval() -> int:
 
 def get_batch_size() -> int:
     """Return the max number of symbols per yfinance batch."""
-    value = os.getenv("PRICE_BATCH_SIZE", "30")
+    value = os.getenv("PRICE_BATCH_SIZE", "2")
     try:
         size = int(value)
         return max(size, 1)
     except (TypeError, ValueError):
-        return 30
+        return 2
 
 
 def get_batch_delay() -> float:
