@@ -1682,7 +1682,7 @@ Optional variables (used by the daemon workers):
 | `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` | Seconds between portfolio/risk update cycles | `300` |
 | `SKIP_WEEKENDS` | Set to `"false"` to run daemons on Saturday/Sunday too (default: `"true"`) | `true` |
 
-> **Weekend behavior:** By default (`SKIP_WEEKENDS=true`), the daemon worker checks the day before starting. If it's Saturday or Sunday, it sleeps until Monday 00:00 local time and only starts the daemons on weekdays. This stops all three daemon loops (price streaming, instrument monitoring, portfolio/risk updates) from running over the weekend. Set `SKIP_WEEKENDS=false` to run 7 days a week.
+> **Weekend behavior:** By default (`SKIP_WEEKENDS=true`), the daemon worker checks the day before starting. If it's Saturday or Sunday, or Monday before 08:00 Australia/Sydney time, it sleeps until Monday 08:00 Sydney time (re-checking hourly) and only starts the daemons within the operating window. This stops all three daemon loops (price streaming, instrument monitoring, portfolio/risk updates) from running over the weekend and before Monday 08:00 Sydney time. Set `SKIP_WEEKENDS=false` to run 7 days a week.
 
 Render Cron Jobs and Background Workers require a **Starter plan or higher**
 (free tier is not supported). All schedules are in **UTC**. Trigger manual runs

@@ -33,6 +33,7 @@ import os
 import sys
 import threading
 import time
+from zoneinfo import ZoneInfo
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
@@ -58,31 +59,42 @@ DAEMONS = [
     ("update-prices", price_streamer_main),
 ]
 
+SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 WEEKEND_DAYS = {5, 6}  # Saturday=5, Sunday=6
+MONDAY_START_HOUR = 8  # Start daemons at 08:00 Sydney time on Monday
 
 
-def is_weekend() -> bool:
-    return datetime.datetime.now().weekday() in WEEKEND_DAYS
+def is_weekend_or_before_monday_start() -> bool:
+    """Return True if it's the weekend, or Monday before 08:00 Sydney time."""
+    now_sydney = datetime.datetime.now(SYDNEY_TZ)
+    if now_sydney.weekday() in WEEKEND_DAYS:
+        return True
+    if now_sydney.weekday() == 0 and now_sydney.hour < MONDAY_START_HOUR:
+        return True
+    return False
 
 
-def wait_for_weekday() -> None:
-    """Sleep until the next Monday 00:00 if today is a weekend day."""
-    while is_weekend():
-        now = datetime.datetime.now()
-        days_ahead = 7 - now.weekday()  # Sat(5)->2, Sun(6)->1 days to Monday
-        next_monday = (now + datetime.timedelta(days=days_ahead)).replace(
-            hour=0, minute=0, second=0, microsecond=0
+def wait_for_monday_start() -> None:
+    """Sleep until Monday 08:00 Sydney time if it's the weekend or early Monday."""
+    while is_weekend_or_before_monday_start():
+        now_sydney = datetime.datetime.now(SYDNEY_TZ)
+        if now_sydney.weekday() in WEEKEND_DAYS:
+            days_ahead = 7 - now_sydney.weekday()  # Sat(5)->2, Sun(6)->1
+        else:
+            days_ahead = 0  # Monday before 08:00
+        next_start = (now_sydney + datetime.timedelta(days=days_ahead)).replace(
+            hour=MONDAY_START_HOUR, minute=0, second=0, microsecond=0
         )
-        sleep_seconds = max((next_monday - now).total_seconds(), 60)
-        # Re-check at most every hour so clock changes are picked up.
+        sleep_seconds = max((next_start - now_sydney).total_seconds(), 60)
         sleep_seconds = min(sleep_seconds, 3600)
         logger.info(
-            "Weekend detected. Daemons paused until Monday %s (sleeping %ds).",
-            next_monday.date(),
+            "Outside operating window (weekend or before Monday 08:00 Sydney). "
+            "Daemons paused until %s (sleeping %ds).",
+            next_start.strftime("%A %Y-%m-%d %H:%M %Z"),
             int(sleep_seconds),
         )
         time.sleep(sleep_seconds)
-    logger.info("Weekday detected. Starting daemons.")
+    logger.info("Operating window reached. Starting daemons.")
 
 
 def _run(name: str, target) -> None:
@@ -99,7 +111,7 @@ def main() -> None:
     skip_weekends = os.getenv("SKIP_WEEKENDS", "true").lower() == "true"
 
     if skip_weekends:
-        wait_for_weekday()
+        wait_for_monday_start()
 
     logger.info("Starting combined daemon worker with %d daemon(s).", len(DAEMONS))
 
