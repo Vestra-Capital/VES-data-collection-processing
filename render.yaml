@@ -30,6 +30,8 @@
 # tier (Starter+ required). All times are UTC. Trigger manual runs from the
 # Render dashboard anytime (replaces workflow_dispatch).
 
+spec_version: "v1"
+
 cronJobs:
   - name: daily-consolidation
     schedule: "0 9 * * *"
