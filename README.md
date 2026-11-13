@@ -1141,7 +1141,7 @@ COLLECTION_NAME=prospects
 | `MARKET_DATA_PROVIDER` | No | `market.yfinance_provider.YFinanceProvider` | Dotted import path for the market data provider class. |
 | `PRICE_POLL_INTERVAL_SECONDS` | No | `15` | Seconds between price polls for `batch/price_streamer.py`. Minimum is 10. |
 | `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` | No | `60` | Seconds between polling cycles for `batch/update_portfolios_and_risk_metrics.py`. Minimum is 30. |
-| `MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS` | No | `120` | Seconds between polling cycles for `batch/monitor_instruments.py`. Minimum is 60. |
+| `MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS` | No | `300` | Seconds between polling cycles for `batch/monitor_instruments.py`. Minimum is 60. |
 | `FEES_REPORT_RATE` | No | `1.5` | Annual fee rate as a percentage for fees reporting. |
 | `COLLECTION_NAME` | No | `prospects` | Target MongoDB collection name for the pending-prospects script. |
 | `BREVO_API_KEY` | **Yes** | — | Brevo API key for transactional email. |
@@ -1396,7 +1396,7 @@ python batch/update_portfolios_and_risk_metrics.py
 
 **Environment variables:**
 - `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` — Seconds between polling cycles (defaults to `60`, minimum `30`).
-- `MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS` — Seconds between polling cycles (defaults to `120`, minimum `60`).
+- `MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS` — Seconds between polling cycles (defaults to `300`, minimum `60`).
 
 ---
 
@@ -1682,7 +1682,7 @@ Optional variables (used by the daemon workers):
 | `MARKET_DATA_PROVIDER` | Market data provider module path | `market.yfinance_provider.YFinanceProvider` |
 | `PRICE_POLL_INTERVAL_SECONDS` | Seconds between price polls | `15` |
 | `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` | Seconds between portfolio/risk update cycles | `60` |
-| `MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS` | Seconds between instrument monitoring cycles | `120` |
+| `MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS` | Seconds between instrument monitoring cycles | `300` |
 | `SKIP_WEEKENDS` | Set to `"false"` to run daemons on Saturday/Sunday too (default: `"true"`) | `true` |
 
 > **Weekend behavior:** By default (`SKIP_WEEKENDS=true`), the daemon worker checks the day before starting. If it's Saturday or Sunday, or Monday before 08:00 Australia/Sydney time, it sleeps until Monday 08:00 Sydney time (re-checking hourly) and only starts the daemons within the operating window. This stops all three daemon loops (price streaming, instrument monitoring, portfolio/risk updates) from running over the weekend and before Monday 08:00 Sydney time. Set `SKIP_WEEKENDS=false` to run 7 days a week.
