@@ -12,6 +12,10 @@ Environment variables:
         (defaults to ``market.yfinance_provider.YFinanceProvider``).
     PRICE_POLL_INTERVAL_SECONDS — Seconds between price polls
         (defaults to ``15``).
+    PRICE_BATCH_SIZE — Max number of symbols per yfinance batch
+        (defaults to ``50``).
+    PRICE_BATCH_DELAY_SECONDS — Seconds to wait between batches
+        (defaults to ``2``).
 """
 
 import logging
@@ -101,6 +105,31 @@ def get_poll_interval() -> int:
         return 15
 
 
+def get_batch_size() -> int:
+    """Return the max number of symbols per yfinance batch."""
+    value = os.getenv("PRICE_BATCH_SIZE", "50")
+    try:
+        size = int(value)
+        return max(size, 1)
+    except (TypeError, ValueError):
+        return 50
+
+
+def get_batch_delay() -> float:
+    """Return the seconds to wait between symbol batches."""
+    value = os.getenv("PRICE_BATCH_DELAY_SECONDS", "2")
+    try:
+        delay = float(value)
+        return max(delay, 0)
+    except (TypeError, ValueError):
+        return 2.0
+
+
+def _chunk_list(items: list, size: int) -> list:
+    """Split a list into chunks of at most *size* items."""
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
 def main() -> None:
     db_name = os.getenv("DATABASE_NAME", "VESTRA_PROD")
     poll_interval = get_poll_interval()
@@ -112,6 +141,8 @@ def main() -> None:
 
     logger.info("Loaded %d symbol(s) from '%s.instruments'.", len(symbols), db_name)
     logger.info("Poll interval: %d seconds.", poll_interval)
+    logger.info("Batch size: %d symbol(s) per yfinance call.", get_batch_size())
+    logger.info("Batch delay: %fs between batches.", get_batch_delay())
 
     provider = get_market_data_provider()
     logger.info("Using market data provider: %s", provider.__class__.__name__)
@@ -128,9 +159,20 @@ def main() -> None:
             return False
         return price > 0
 
+    batch_size = get_batch_size()
+    batch_delay = get_batch_delay()
+
     while True:
         try:
-            prices = provider.fetch_current_prices(symbols)
+            batches = _chunk_list(symbols, batch_size)
+            logger.info("Fetching prices in %d batch(es) of up to %d symbol(s).", len(batches), batch_size)
+            all_prices: Dict[str, float] = {}
+            for idx, batch in enumerate(batches):
+                if idx > 0 and batch_delay > 0:
+                    time.sleep(batch_delay)
+                batch_prices = provider.fetch_current_prices(batch)
+                all_prices.update(batch_prices)
+            prices = all_prices
             for symbol, price in prices.items():
                 if not _is_valid_price(price):
                     if symbol in last_valid_price:

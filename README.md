@@ -928,7 +928,7 @@ python batch/daily_consolidation.py
 - `MONGODB_SRV` — MongoDB connection string.
 - `DATABASE_NAME` — Database name (defaults to `VESTRA_PROD`).
 - `MARKET_DATA_PROVIDER` — Market data provider module path (defaults to `market.yfinance_provider.YFinanceProvider`).
-- `PRICE_POLL_INTERVAL_SECONDS` — Seconds between price polls (defaults to `60`, minimum `10`).
+- `PRICE_POLL_INTERVAL_SECONDS` — Seconds between price polls (defaults to `15`, minimum `10`).
 
 ---
 
@@ -1105,7 +1105,9 @@ DATABASE_NAME=VESTRA_PROD
 # Market Data Provider
 # ===========================================
 MARKET_DATA_PROVIDER=market.yfinance_provider.YFinanceProvider
-PRICE_POLL_INTERVAL_SECONDS=60
+PRICE_POLL_INTERVAL_SECONDS=15
+PRICE_BATCH_SIZE=50
+PRICE_BATCH_DELAY_SECONDS=2
 
 # ===========================================
 # Fees Reporting
@@ -1373,7 +1375,9 @@ python batch/price_streamer.py
 - Runs until interrupted (Ctrl+C).
 
 **Environment variables:**
-- `PRICE_POLL_INTERVAL_SECONDS` — Seconds between price polls (defaults to `60`, minimum `10`).
+- `PRICE_POLL_INTERVAL_SECONDS` — Seconds between price polls (defaults to `15`, minimum `10`).
+- `PRICE_BATCH_SIZE` — Max symbols per yfinance batch (defaults to `50`).
+- `PRICE_BATCH_DELAY_SECONDS` — Seconds between batches (defaults to `2`).
 
 ### 14. Start Portfolio / Risk Updater Daemon
 
@@ -1681,6 +1685,8 @@ Optional variables (used by the daemon workers):
 |----------|-------------|---------|
 | `MARKET_DATA_PROVIDER` | Market data provider module path | `market.yfinance_provider.YFinanceProvider` |
 | `PRICE_POLL_INTERVAL_SECONDS` | Seconds between price polls | `15` |
+| `PRICE_BATCH_SIZE` | Max symbols per yfinance batch | `50` |
+| `PRICE_BATCH_DELAY_SECONDS` | Seconds between batches | `2` |
 | `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS` | Seconds between portfolio/risk update cycles | `60` |
 | `MONITOR_INSTRUMENTS_POLL_INTERVAL_SECONDS` | Seconds between instrument monitoring cycles | `300` |
 | `SKIP_WEEKENDS` | Set to `"false"` to run daemons on Saturday/Sunday too (default: `"true"`) | `true` |
@@ -1767,7 +1773,7 @@ both would run the same daemons concurrently):
    - Type: Background Worker
    - Build command: `pip install -r requirements.txt`
    - Start command: `python batch/price_streamer.py`
-   - Env vars: `MONGODB_SRV`, `DATABASE_NAME`, `MARKET_DATA_PROVIDER`, `PRICE_POLL_INTERVAL_SECONDS`
+   - Env vars: `MONGODB_SRV`, `DATABASE_NAME`, `MARKET_DATA_PROVIDER`, `PRICE_POLL_INTERVAL_SECONDS`, `PRICE_BATCH_SIZE`, `PRICE_BATCH_DELAY_SECONDS`
 
 ### Typical Schedule
 
