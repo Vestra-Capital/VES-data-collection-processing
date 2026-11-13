@@ -1,18 +1,30 @@
-"""Yahoo Finance implementation of the market data provider abstraction."""
+"""Yahoo Finance implementation of the market data provider abstraction.
+
+Every API call uses a brand-new ``requests.Session`` with a randomized
+``User-Agent`` header (see ``market.yfinance_session``), and retries with
+exponential backoff on HTTP 429 (Too Many Requests) to avoid Yahoo Finance
+rate limits on Render.
+"""
 
 from typing import Any, Dict, List
 
 import yfinance as yf
 
 from market.provider import MarketDataProvider
+from market.yfinance_session import create_session, retry_on_429
 
 
 class YFinanceProvider(MarketDataProvider):
     """Fetch instrument metadata and current prices from Yahoo Finance."""
 
     def fetch_instrument_metadata(self, symbol: str) -> Dict[str, Any]:
-        ticker = yf.Ticker(symbol)
-        info = ticker.info
+        session = create_session()
+        try:
+            ticker = yf.Ticker(symbol, session=session)
+            info = retry_on_429(lambda: ticker.info)
+        finally:
+            session.close()
+
         result: Dict[str, Any] = {}
 
         sector = info.get("sector")
@@ -42,10 +54,13 @@ class YFinanceProvider(MarketDataProvider):
         if not symbols:
             return {}
 
+        session = create_session()
         try:
-            data = yf.download(symbols, period="1d", progress=False)
-        except Exception:
-            return {}
+            data = retry_on_429(
+                lambda: yf.download(symbols, period="1d", progress=False, session=session)
+            )
+        finally:
+            session.close()
 
         if data.empty:
             return {}
@@ -93,11 +108,14 @@ class YFinanceProvider(MarketDataProvider):
         if not symbol:
             return []
 
+        session = create_session()
         try:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period=period, auto_adjust=True)
-        except Exception:
-            return []
+            ticker = yf.Ticker(symbol, session=session)
+            hist = retry_on_429(
+                lambda: ticker.history(period=period, auto_adjust=True)
+            )
+        finally:
+            session.close()
 
         if hist is None or hist.empty:
             return []
