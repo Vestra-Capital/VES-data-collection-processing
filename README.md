@@ -1647,13 +1647,19 @@ section documents how to set them up, replacing the GitHub Actions workflows
 |-----------------|------|----------|--------|---------|
 | `daily-consolidation` | Cron Job | Daily `0 9 * * *` (09:00 UTC) | `batch/daily_consolidation.py` | Full fees reporting pipeline |
 | `data-collection` | Cron Job | Hourly `0 * * * *` (:00 UTC) | `batch/data_collection.py` | Core data collection |
-| `monitor-instruments` | Background Worker | Continuous daemon | `batch/monitor_instruments.py` | Detects new instruments and enriches them |
-| `update-portfolios-risk` | Background Worker | Continuous daemon | `batch/update_portfolios_and_risk_metrics.py` | Maintains NAV timeseries and risk metrics |
-| `update-prices` | Background Worker | Continuous daemon | `batch/price_streamer.py` | Polls current instrument prices |
+| `daemon-worker` | Background Worker | Continuous daemon | `batch/daemon_worker.py` | Runs all 3 daemons (monitor-instruments, update-portfolios-risk, update-prices) in one service |
 
 The two Cron Jobs (`daily-consolidation`, `data-collection`) run once and exit.
-The three Background Workers (`monitor-instruments`, `update-portfolios-risk`,
-`update-prices`) run infinite polling loops and stay alive continuously.
+The `daemon-worker` Background Worker runs all three infinite-polling daemon
+loops concurrently in a single process, saving on Render costs (one Background
+Worker service instead of three).
+
+> **Cost-saving option:** Use the single `daemon-worker` Background Worker
+> (`batch/daemon_worker.py`) instead of three separate Background Workers. It
+> runs `monitor_instruments`, `update_portfolios_and_risk_metrics`, and
+> `price_streamer` in separate threads within one Render service. Each daemon
+> has independent error handling, so a failure in one loop does not kill the
+> others.
 
 ### Prerequisites
 
@@ -1720,8 +1726,24 @@ Create these manually in the Render dashboard under **Cron Jobs**:
 
 ### Step 4: Create the Background Worker daemons
 
-Create these manually in the Render dashboard as **Background Worker** services
-(do not combine with cron jobs — both would run the same daemon concurrently):
+Create **one** Background Worker for all three daemons (recommended for cost
+savings), or create three separate ones if you prefer isolation.
+
+#### Option A: Single combined daemon worker (recommended — saves money)
+
+Create one **`daemon-worker`** Background Worker:
+
+- Type: Background Worker
+- Build command: `pip install -r requirements.txt`
+- Start command: `python batch/daemon_worker.py`
+- Env vars: `MONGODB_SRV`, `DATABASE_NAME`, `MORRISON_ACCESS_KEY`, `MORRISON_API_BASE_URL`, `MARKET_DATA_PROVIDER`, `PRICE_POLL_INTERVAL_SECONDS`, `UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS`
+
+This runs all three daemon loops (`monitor_instruments`, `update_portfolios_and_risk_metrics`, `price_streamer`) concurrently in one Render service via threads. One Background Worker bill instead of three.
+
+#### Option B: Three separate Background Workers
+
+Create each daemon as its own Background Worker (do not combine with Option A —
+both would run the same daemons concurrently):
 
 1. **`monitor-instruments`**
    - Type: Background Worker
@@ -1761,6 +1783,10 @@ standard 5-field format: `minute hour day month weekday`.
   Worker, not a Cron Job. Cron Jobs exit after completion.
 - **Missing instruments/prices:** Verify `MARKET_DATA_PROVIDER` is set and
   the provider can reach external APIs (network access).
+- **Combined daemon worker only running one loop:** Check the Render logs —
+  each daemon runs in its own thread; if one thread exits with an exception it
+  is logged but the others continue. All three `main()` functions have internal
+  `try/except` loops that keep running on transient errors.
 - **Blueprint errors:** If you added a `render.yaml`, remove it or strip out
   `cronJobs`/`backgroundWorker` keys — Render Blueprint does not support them.
 
