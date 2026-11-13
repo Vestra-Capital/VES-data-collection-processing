@@ -700,8 +700,24 @@ def run_once(db_name: str) -> None:
     portfolios_missing_nav = fetch_portfolios_missing_nav(db_name, excluded_categories)
     portfolios_with_nav = fetch_portfolios_with_nav(db_name, excluded_categories)
 
-    logger.info("Found %d portfolio(s) missing nav_timeseries.", len(portfolios_missing_nav))
-    logger.info("Found %d portfolio(s) to refresh nav/risk metrics.", len(portfolios_with_nav))
+    missing_details = ", ".join(
+        f"{p.get('accountNumber','')}/{p.get('accountName','')}"
+        for p in portfolios_missing_nav
+    )
+    with_nav_details = ", ".join(
+        f"{p.get('accountNumber','')}/{p.get('accountName','')}"
+        for p in portfolios_with_nav
+    )
+    logger.info(
+        "Found %d portfolio(s) missing nav_timeseries: %s.",
+        len(portfolios_missing_nav),
+        missing_details or "-",
+    )
+    logger.info(
+        "Found %d portfolio(s) to refresh nav/risk metrics: %s.",
+        len(portfolios_with_nav),
+        with_nav_details or "-",
+    )
 
     if not portfolios_missing_nav and not portfolios_with_nav:
         logger.info("Nothing to do this cycle.")
