@@ -443,6 +443,7 @@ sequenceDiagram
 
     loop For each portfolio
         Script->>Script: _calculate_nav_timeseries(holdings, price_map)
+    end
     Script->>MongoPortfolios: update_one({accountNumber}, {$set: {nav_timeseries}})
     MongoPortfolios-->>Script: OK
 ```
@@ -477,6 +478,7 @@ flowchart TB
         CronJob2[data-collection Cron Job] -->|hourly :00 UTC| Batch
         Worker[daemon-worker Background Worker] -->|continuous| Monitor
         Worker -->|continuous| Price
+        Worker -->|continuous| Tags
     end
 
     style Feeds fill:#e1f5e1,stroke:#333
