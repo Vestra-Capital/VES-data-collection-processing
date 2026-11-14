@@ -58,8 +58,8 @@ logger = logging.getLogger(__name__)
 class _DowngradeDelistedFilter(logging.Filter):
     """Downgrade yfinance non-fatal ERROR messages to WARNING.
 
-    'Delisted' and HTTP 404 'Quote not found' errors are expected for
-    invalid/delisted symbols and are downgraded to WARNING.
+    'Delisted', HTTP 404 'Quote not found', and 'Failed downloads'
+    messages for invalid/delisted symbols are downgraded to WARNING.
 
     Rate limit errors (429 / Too Many Requests / YFRateLimitError) are
     intentionally left as ERROR so they remain visible in the terminal.
@@ -78,6 +78,13 @@ class _DowngradeDelistedFilter(logging.Filter):
 
         # yfinance HTTP 404 'Quote not found' errors for invalid symbols
         if "http error 404" in msg or "quote not found" in msg:
+            record.levelno = logging.WARNING
+            record.levelname = "WARNING"
+            return True
+
+        # yfinance 'Failed downloads' messages for symbols that couldn't
+        # be fetched in a batch (expected for delisted/invalid symbols)
+        if "failed downloads" in msg:
             record.levelno = logging.WARNING
             record.levelname = "WARNING"
             return True
