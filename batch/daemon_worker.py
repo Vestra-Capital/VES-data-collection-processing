@@ -1,13 +1,14 @@
 """Combined Background Worker for the VES data-collection daemons.
 
-Runs all four long-lived polling loops concurrently in a single Render
+Runs all five long-lived polling loops concurrently in a single Render
 Background Worker service to save on Render costs (one service instead of
-four):
+five):
 
   - batch/monitor_instruments.py      -> detect and enrich new instruments from portfolios
   - batch/monitor_feeds_tags.py       -> detect and add instruments from feeds.tags
+  - batch/get_instruments_timeseries.py -> fetch timeseries + performance for instruments
   - batch/update_portfolios_and_risk_metrics.py -> maintain NAV timeseries and risk metrics
-  - batch/price_streamer.py           -> poll current instrument prices
+  - batch/price_streamer.py           -> poll current instrument prices (ASX hours only)
 
 Each daemon runs in its own daemon thread with its own error handling, so a
 failure in one loop does not kill the others. Render sees a single Background
@@ -26,6 +27,7 @@ Environment variables (set in the Render dashboard Environment tab):
     PRICE_POLL_INTERVAL_SECONDS - Seconds between price polls (default: 15)
     UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS - Seconds between portfolio/risk cycles (default: 300)
     FEEDS_TAGS_POLL_INTERVAL_SECONDS - Seconds between feeds.tags polling cycles (default: 300)
+    TIMESERIES_POLL_INTERVAL_SECONDS - Seconds between timeseries fetch cycles (default: 14400 / 4h)
     SKIP_WEEKENDS             - Set to "false" to run price_streamer on
                                 Saturday/Sunday too (default: "true")
 """
@@ -48,6 +50,7 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 from batch.monitor_feeds_tags import main as monitor_feeds_tags_main
 from batch.monitor_instruments import main as monitor_instruments_main
+from batch.get_instruments_timeseries import main as timeseries_main
 from batch.price_streamer import main as price_streamer_main
 from batch.update_portfolios_and_risk_metrics import main as update_portfolios_main
 
@@ -174,9 +177,28 @@ def run_feeds_tags_continuously() -> None:
         time.sleep(poll_interval)
 
 
+def run_timeseries_continuously() -> None:
+    """Run get_instruments_timeseries in a continuous loop with a poll interval.
+
+    Fetches 1-year price timeseries for instruments missing it, calculates
+    performance_1m / performance_3m / performance_1y, and upserts into
+    instruments collection. Polls every
+    TIMESERIES_POLL_INTERVAL_SECONDS (default: 14400 seconds / 4 hours).
+    """
+    poll_interval = int(os.getenv("TIMESERIES_POLL_INTERVAL_SECONDS", "14400"))
+
+    while True:
+        try:
+            timeseries_main()
+        except Exception:
+            logger.exception("timeseries daemon exited unexpectedly; retrying.")
+        time.sleep(poll_interval)
+
+
 DAEMONS = [
     ("monitor-instruments", monitor_instruments_main),
     ("feeds-tags", run_feeds_tags_continuously),
+    ("timeseries", run_timeseries_continuously),
     ("update-portfolios-risk", update_portfolios_main),
     ("update-prices", run_price_streamer_with_weekend_guard),
 ]
