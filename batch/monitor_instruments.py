@@ -1,8 +1,11 @@
-"""Persistent daemon to monitor portfolios and add new instruments to the collection.
+"""Persistent daemon to monitor portfolios and add/enrich instruments in the collection.
 
 Polls the ``portfolios`` collection on a configurable interval, checks holdings
 for instrument symbols that are missing from the ``instruments`` collection,
 and upserts them with metadata fetched from the configured market data provider.
+
+Also enriches instruments that already exist but are missing metadata fields
+(sector, industry, dividend_yield, currentPrice).
 
 Only portfolios whose ``client_category`` is not ``"Inactive"`` are considered.
 
@@ -173,8 +176,39 @@ def upsert_instruments(db_name: str, instruments: List[Dict[str, Any]]) -> None:
         client.close()
 
 
+def fetch_instruments_missing_metadata(db_name: str, symbols: List[str]) -> List[Dict[str, Any]]:
+    """Fetch instruments that exist but are missing metadata fields.
+
+    Returns documents for symbols that have at least one missing field among
+    sector, industry, dividend_yield, or currentPrice.
+    """
+    if not symbols:
+        return []
+
+    client = get_mongo_client()
+    try:
+        db = client[db_name]
+        collection = db["instruments"]
+
+        query = {
+            "symbol": {"$in": symbols},
+            "$or": [
+                {"sector": {"$exists": False}},
+                {"industry": {"$exists": False}},
+                {"dividend_yield": {"$exists": False}},
+                {"currentPrice": {"$exists": False}},
+            ],
+        }
+        cursor = collection.find(query, {"_id": 0})
+        return [doc for doc in cursor if isinstance(doc, dict)]
+    except PyMongoError as e:
+        raise RuntimeError(f"Failed to fetch instruments missing metadata from MongoDB: {e}") from e
+    finally:
+        client.close()
+
+
 def run_once(db_name: str) -> None:
-    """Run one polling cycle: detect and add new instruments."""
+    """Run one polling cycle: detect and add/enrich instruments."""
     logger.info("Fetching active portfolios from '%s.portfolios'...", db_name)
     portfolios = fetch_active_portfolios(db_name)
     logger.info("Fetched %d active portfolio(s).", len(portfolios))
@@ -202,16 +236,39 @@ def run_once(db_name: str) -> None:
     logger.info("Found %d unique instrument symbol(s) in active portfolios.", len(all_symbols))
 
     existing_instruments = fetch_instruments(db_name, list(all_symbols))
-    present_symbols: Set[str] = {
-        doc.get("symbol") for doc in existing_instruments if doc.get("symbol")
+    existing_by_symbol: Dict[str, Dict[str, Any]] = {
+        doc.get("symbol"): doc
+        for doc in existing_instruments
+        if doc.get("symbol")
     }
+
+    present_symbols: Set[str] = set(existing_by_symbol.keys())
     missing_symbols = [s for s in all_symbols if s not in present_symbols]
 
-    if not missing_symbols:
-        logger.info("All instruments already present in collection.")
-        return
+    # Also find instruments that exist but are missing metadata fields
+    missing_metadata_docs = fetch_instruments_missing_metadata(db_name, list(all_symbols))
+    missing_metadata_by_symbol: Dict[str, Dict[str, Any]] = {
+        doc.get("symbol"): doc
+        for doc in missing_metadata_docs
+        if doc.get("symbol")
+    }
 
-    logger.info("Found %d new instrument(s) missing from collection.", len(missing_symbols))
+    # Merge missing_metadata docs into existing_by_symbol so we have full data for merging
+    for symbol, doc in missing_metadata_by_symbol.items():
+        existing_by_symbol[symbol] = doc
+
+    total_new = len(missing_symbols)
+    total_missing_metadata = len(missing_metadata_by_symbol)
+
+    logger.info(
+        "Found %d new instrument(s) missing from collection and %d existing instrument(s) missing metadata.",
+        total_new,
+        total_missing_metadata,
+    )
+
+    if not missing_symbols and not missing_metadata_by_symbol:
+        logger.info("All instruments already present with metadata.")
+        return
 
     provider = _get_market_data_provider()
     logger.info("Using market data provider: %s", provider.__class__.__name__)
@@ -220,6 +277,8 @@ def run_once(db_name: str) -> None:
     docs_to_insert = [doc for doc in base_docs if doc["symbol"] in missing_symbols]
 
     enriched: List[Dict[str, Any]] = []
+
+    # Process brand-new instruments (not in collection at all)
     for doc in docs_to_insert:
         symbol = doc.get("symbol")
         if not symbol:
@@ -231,11 +290,26 @@ def run_once(db_name: str) -> None:
         except Exception as exc:
             logger.warning("Failed to fetch metadata for symbol=%s: %s", symbol, exc)
 
+    # Process existing instruments missing metadata fields
+    for symbol, existing_doc in missing_metadata_by_symbol.items():
+        try:
+            metadata = provider.fetch_instrument_metadata(symbol)
+            if metadata:
+                merged = {**existing_doc, **metadata}
+                enriched.append(merged)
+        except Exception as exc:
+            logger.warning("Failed to fetch metadata for symbol=%s: %s", symbol, exc)
+
     if enriched:
         upsert_instruments(db_name, enriched)
-        logger.info("Added %d new instrument(s) to collection.", len(enriched))
+        logger.info(
+            "Upserted %d instrument(s) (new: %d, metadata-enriched: %d).",
+            len(enriched),
+            len(docs_to_insert),
+            len(missing_metadata_by_symbol),
+        )
     else:
-        logger.info("No new instruments could be enriched.")
+        logger.info("No instruments could be enriched.")
 
 
 def main() -> None:
