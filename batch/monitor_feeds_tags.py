@@ -10,9 +10,9 @@ the result into the ``instruments`` collection.
 Environment variables:
     MONGODB_SRV — MongoDB connection string.
     DATABASE_NAME — Database name (defaults to ``VESTRA_PROD``).
-    FEEDS_COLLECTION — Collection name to read tags from (defaults to ``feeds.tags``.
-        Use ``database.collection`` notation if tags live in a different database,
-        e.g. ``feeds.tags`` reads from database ``feeds``, collection ``tags``).
+    FEEDS_COLLECTION — Collection name to read tags from (defaults to ``feeds``).
+        Each document should have a ``tags`` array field (e.g.
+        ``["^XJO", "^AXJT", "USOIL"]``) or a comma-separated string.
 """
 
 import logging
@@ -41,13 +41,17 @@ def get_mongo_client() -> MongoClient:
 
 
 def fetch_tags_documents(db_name: str) -> List[Dict[str, Any]]:
-    """Read all documents from the feeds tags collection."""
+    """Read all documents from the feeds tags collection.
+
+    Fetches the latest 1000 documents ordered by date_time DESC.
+    """
     client = get_mongo_client()
     try:
         db = client[db_name]
-        collection_name = os.getenv("FEEDS_COLLECTION", "feeds.tags")
+        collection_name = os.getenv("FEEDS_COLLECTION", "feeds")
         collection = db[collection_name]
-        documents = list(collection.find({}, {"_id": 0}))
+        cursor = collection.find({}, {"_id": 0}).sort("date_time", -1).limit(1000)
+        documents = list(cursor)
         # Debug: list all collections if empty
         if not documents:
             all_colls = db.list_collection_names()
@@ -139,7 +143,8 @@ def upsert_instruments(db_name: str, instruments: List[Dict[str, Any]]) -> None:
 
 def main() -> None:
     db_name = os.getenv("DATABASE_NAME", "VESTRA_PROD")
-    print(f"Fetching tags from '{db_name}.feeds.tags'...")
+    collection_name = os.getenv("FEEDS_COLLECTION", "feeds")
+    print(f"Fetching tags from '{db_name}.{collection_name}'...")
     documents = fetch_tags_documents(db_name)
     print(f"Fetched {len(documents)} tag document(s).")
 
