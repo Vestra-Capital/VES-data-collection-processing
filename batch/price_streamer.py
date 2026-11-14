@@ -3,7 +3,9 @@
 This module is intended to run as a scheduled or long-lived process.  It
 loads all instrument symbols from the ``instruments`` collection, fetches
 current prices from the configured market data provider on a polling
-interval, and updates each document's ``currentPrice`` field.
+interval, and updates each document's ``currentPrice`` field along with
+``performance_1m``, ``performance_3m`` and ``performance_1y`` calculated
+from the existing ``timeseries`` array already stored in MongoDB.
 
 Environment variables:
     MONGODB_SRV — MongoDB connection string.
@@ -23,7 +25,8 @@ import math
 import os
 import sys
 import time
-from typing import Any, Callable, Dict
+from datetime import date, datetime, timedelta
+from typing import Any, Callable, Dict, List
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -62,21 +65,70 @@ def load_symbols(db_name: str) -> list:
         client.close()
 
 
+def _calculate_performance(
+    latest_price: float, timeseries: List[Dict[str, Any]]
+) -> Dict[str, float]:
+    """Calculate 1M, 3M, 1Y performance percentages.
+
+    Uses *latest_price* (the freshly fetched currentPrice) as the end price
+    and looks up historical prices from *timeseries* for ~30/90/365 days ago.
+    """
+    if not timeseries or not latest_price:
+        return {}
+
+    sorted_ts = sorted(timeseries, key=lambda x: x.get("date", ""))
+
+    try:
+        latest_dt = date.today()
+    except Exception:
+        return {}
+
+    result: Dict[str, float] = {}
+
+    for label, days in [("1m", 30), ("3m", 90), ("1y", 365)]:
+        target_date = latest_dt - timedelta(days=days)
+
+        closest_price = None
+        for entry in sorted_ts:
+            try:
+                entry_date = datetime.strptime(entry.get("date", ""), "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+            if entry_date <= target_date:
+                closest_price = entry.get("price")
+            else:
+                break
+
+        if closest_price and closest_price > 0:
+            performance = (latest_price - closest_price) / closest_price * 100
+            result[f"performance_{label}"] = round(performance, 2)
+
+    return result
+
+
 def create_price_updater(db_name: str) -> Callable[[str, float], None]:
-    """Return a callback that upserts ``currentPrice`` into MongoDB."""
+    """Return a callback that upserts ``currentPrice`` plus performance fields
+    (calculated from the existing ``timeseries`` array) into MongoDB."""
     client = get_mongo_client()
     db = client[db_name]
     collection = db["instruments"]
 
     def on_price(symbol: str, price: float) -> None:
         try:
+            doc = collection.find_one({"symbol": symbol}, {"_id": 0, "timeseries": 1})
+            timeseries = doc.get("timeseries", []) if isinstance(doc, dict) else []
+            performance = _calculate_performance(price, timeseries)
+
+            update: Dict[str, Any] = {"currentPrice": price}
+            update.update(performance)
+
             collection.update_one(
                 {"symbol": symbol},
-                {"$set": {"currentPrice": price}},
+                {"$set": update},
                 upsert=True,
             )
         except PyMongoError as e:
-            logger.error("Failed to upsert price for %s: %s", symbol, e)
+            logger.error("Failed to upsert price/performance for %s: %s", symbol, e)
 
     return on_price
 
