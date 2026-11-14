@@ -140,10 +140,18 @@ def upsert_instruments(db_name: str, instruments: List[Dict[str, Any]]) -> None:
             # in the new instrument document; leave everything else intact.
             existing = collection.find_one({"symbol": symbol}, {"_id": 0})
             if existing:
-                merged = {**existing, **instrument}
+                # Filter out empty string values from new instrument so they
+                # don't wipe out existing metadata fields.
+                clean_instrument = {
+                    k: v for k, v in instrument.items() if v != ""
+                }
+                merged = {**existing, **clean_instrument}
                 collection.replace_one({"symbol": symbol}, merged, upsert=True)
             else:
-                collection.replace_one({"symbol": symbol}, instrument, upsert=True)
+                clean_instrument = {
+                    k: v for k, v in instrument.items() if v != ""
+                }
+                collection.replace_one({"symbol": symbol}, clean_instrument, upsert=True)
             upserted += 1
 
         logger.info(

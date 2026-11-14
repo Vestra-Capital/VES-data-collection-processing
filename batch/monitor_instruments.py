@@ -148,6 +148,9 @@ def build_instrument_docs_from_holdings(
                 "securityDescription": holding.get("securityDescription", ""),
                 "currency": holding.get("currency", ""),
             }
+            # Remove empty string fields so they don't overwrite existing
+            # metadata when merged into an instrument document.
+            seen[symbol] = {k: v for k, v in seen[symbol].items() if v != ""}
     return list(seen.values())
 
 
