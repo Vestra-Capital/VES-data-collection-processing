@@ -54,12 +54,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DAEMONS = [
-    ("monitor-instruments", monitor_instruments_main),
-    ("update-portfolios-risk", update_portfolios_main),
-    ("update-prices", run_price_streamer_with_weekend_guard),
-]
-
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 WEEKEND_DAYS = {5, 6}  # Saturday=5, Sunday=6
 MONDAY_START_HOUR = 8  # Start daemons at 08:00 Sydney time on Monday
@@ -111,6 +105,13 @@ def run_price_streamer_with_weekend_guard() -> None:
         wait_for_monday_start()
 
     price_streamer_main()
+
+
+DAEMONS = [
+    ("monitor-instruments", monitor_instruments_main),
+    ("update-portfolios-risk", update_portfolios_main),
+    ("update-prices", run_price_streamer_with_weekend_guard),
+]
 
 
 def _run(name: str, target) -> None:
