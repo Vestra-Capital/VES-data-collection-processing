@@ -46,6 +46,16 @@ class YFinanceProvider(MarketDataProvider):
         if current_price is not None:
             result["currentPrice"] = current_price
 
+        # securityDescription comes from longName (company name)
+        long_name = info.get("longName") or info.get("shortName")
+        if isinstance(long_name, str) and long_name.strip():
+            result["securityDescription"] = long_name.strip()
+
+        # currency comes from yfinance currency field
+        currency = info.get("currency")
+        if isinstance(currency, str) and currency.strip():
+            result["currency"] = currency.strip()
+
         return result
 
     def fetch_current_prices(self, symbols: list) -> Dict[str, float]:
