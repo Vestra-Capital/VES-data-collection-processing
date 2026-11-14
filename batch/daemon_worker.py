@@ -54,6 +54,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+class _DowngradeDelistedFilter(logging.Filter):
+    """Downgrade yfinance 'delisted' ERROR messages to WARNING."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if (
+            record.levelno == logging.ERROR
+            and "delisted" in record.getMessage().lower()
+        ):
+            record.levelno = logging.WARNING
+            record.levelname = "WARNING"
+        return True
+
+
+# Apply to yfinance's internal logger so delisted symbol errors appear as
+# WARNING instead of ERROR in the terminal output.
+logging.getLogger("yfinance").addFilter(_DowngradeDelistedFilter())
+
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 WEEKEND_DAYS = {5, 6}  # Saturday=5, Sunday=6
 MONDAY_START_HOUR = 8  # Start daemons at 08:00 Sydney time on Monday
