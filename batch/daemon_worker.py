@@ -56,7 +56,11 @@ logger = logging.getLogger(__name__)
 
 
 class _DowngradeDelistedFilter(logging.Filter):
-    """Downgrade yfinance 'delisted' ERROR messages to WARNING."""
+    """Downgrade yfinance 'delisted' ERROR messages to WARNING.
+
+    Rate limit errors (429 / Too Many Requests / YFRateLimitError) are
+    intentionally left as ERROR so they remain visible in the terminal.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
         if (
