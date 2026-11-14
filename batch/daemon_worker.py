@@ -24,7 +24,8 @@ Environment variables (set in the Render dashboard Environment tab):
     MARKET_DATA_PROVIDER      - Market data provider module path
     PRICE_POLL_INTERVAL_SECONDS - Seconds between price polls (default: 15)
     UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS - Seconds between portfolio/risk cycles (default: 300)
-    SKIP_WEEKENDS             - Set to "false" to run daemons on Saturday/Sunday too (default: "true")
+    SKIP_WEEKENDS             - Set to "false" to run price_streamer on
+                                Saturday/Sunday too (default: "true")
 """
 
 import datetime
@@ -56,7 +57,7 @@ logger = logging.getLogger(__name__)
 DAEMONS = [
     ("monitor-instruments", monitor_instruments_main),
     ("update-portfolios-risk", update_portfolios_main),
-    ("update-prices", price_streamer_main),
+    ("update-prices", run_price_streamer_with_weekend_guard),
 ]
 
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
@@ -97,6 +98,21 @@ def wait_for_monday_start() -> None:
     logger.info("Operating window reached. Starting daemons.")
 
 
+def run_price_streamer_with_weekend_guard() -> None:
+    """Run price_streamer only on weekdays (after Monday 08:00 Sydney).
+
+    The other two daemons (monitor-instruments, update-portfolios-risk) run
+    continuously regardless of weekends. Only price_streamer (Yahoo Finance
+    price polling) is paused over the weekend.
+    """
+    skip_weekends = os.getenv("SKIP_WEEKENDS", "true").lower() == "true"
+
+    if skip_weekends:
+        wait_for_monday_start()
+
+    price_streamer_main()
+
+
 def _run(name: str, target) -> None:
     """Run a daemon's main loop, logging but not propagating fatal errors."""
     try:
@@ -108,11 +124,6 @@ def _run(name: str, target) -> None:
 
 
 def main() -> None:
-    skip_weekends = os.getenv("SKIP_WEEKENDS", "true").lower() == "true"
-
-    if skip_weekends:
-        wait_for_monday_start()
-
     logger.info("Starting combined daemon worker with %d daemon(s).", len(DAEMONS))
 
     threads = [
