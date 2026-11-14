@@ -708,12 +708,12 @@ def run_once(db_name: str) -> None:
         f"{p.get('accountNumber','')}/{p.get('accountName','')}"
         for p in portfolios_with_nav
     )
-    logger.info(
+    logger.debug(
         "Found %d portfolio(s) missing nav_timeseries: %s.",
         len(portfolios_missing_nav),
         missing_details or "-",
     )
-    logger.info(
+    logger.debug(
         "Found %d portfolio(s) to refresh nav/risk metrics: %s.",
         len(portfolios_with_nav),
         with_nav_details or "-",
