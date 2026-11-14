@@ -27,6 +27,7 @@ import sys
 import time
 from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, List
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -42,6 +43,12 @@ from pymongo.errors import PyMongoError
 from market.provider import MarketDataProvider
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+
+SYDNEY_TZ = ZoneInfo("Australia/Sydney")
+ASX_TRADING_HOURS_START = 9   # 09:00 Sydney time
+ASX_TRADING_HOURS_END = 17    # 17:00 Sydney time
+
+WEEKEND_DAYS = {5, 6}  # Saturday=5, Sunday=6
 
 
 def get_mongo_client() -> MongoClient:
@@ -198,6 +205,51 @@ def _sleep_with_progress(seconds: int) -> None:
     print("\r" + " " * (width + 40) + "\r", end="", flush=True)
 
 
+def is_asx_trading_hours() -> bool:
+    """Return True if current Sydney time is within ASX trading hours.
+
+    Trading hours: 09:00-17:00 Sydney time, Monday-Friday (business days).
+    """
+    now_sydney = datetime.now(SYDNEY_TZ)
+    if now_sydney.weekday() in WEEKEND_DAYS:
+        return False
+    if now_sydney.hour < ASX_TRADING_HOURS_START or now_sydney.hour >= ASX_TRADING_HOURS_END:
+        return False
+    return True
+
+
+def _sleep_until_trading_hours() -> None:
+    """Sleep until the next ASX trading window opens."""
+    while not is_asx_trading_hours():
+        now_sydney = datetime.now(SYDNEY_TZ)
+        if now_sydney.weekday() in WEEKEND_DAYS:
+            # Weekend: sleep until Monday 09:00
+            days_ahead = 7 - now_sydney.weekday()  # Sat(5)->2, Sun(6)->1
+            next_open = (now_sydney + timedelta(days=days_ahead)).replace(
+                hour=ASX_TRADING_HOURS_START, minute=0, second=0, microsecond=0
+            )
+        elif now_sydney.hour >= ASX_TRADING_HOURS_END:
+            # After 17:00: sleep until tomorrow 09:00
+            next_open = (now_sydney + timedelta(days=1)).replace(
+                hour=ASX_TRADING_HOURS_START, minute=0, second=0, microsecond=0
+            )
+        else:
+            # Before 09:00: sleep until today 09:00
+            next_open = now_sydney.replace(
+                hour=ASX_TRADING_HOURS_START, minute=0, second=0, microsecond=0
+            )
+        sleep_seconds = max((next_open - now_sydney).total_seconds(), 60)
+        sleep_seconds = min(sleep_seconds, 3600)
+        logger.info(
+            "Outside ASX trading hours (09:00-17:00 Sydney, business days). "
+            "Price polling paused until %s (sleeping %ds).",
+            next_open.strftime("%A %Y-%m-%d %H:%M %Z"),
+            int(sleep_seconds),
+        )
+        time.sleep(sleep_seconds)
+    logger.info("ASX trading hours reached. Starting price polling.")
+
+
 def main() -> None:
     db_name = os.getenv("DATABASE_NAME", "VESTRA_PROD")
     poll_interval = get_poll_interval()
@@ -232,6 +284,8 @@ def main() -> None:
 
     while True:
         try:
+            _sleep_until_trading_hours()
+
             batches = _chunk_list(symbols, batch_size)
             logger.info("Fetching prices in %d batch(es) of up to %d symbol(s).", len(batches), batch_size)
             all_prices: Dict[str, float] = {}
