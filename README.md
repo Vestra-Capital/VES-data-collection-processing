@@ -443,9 +443,68 @@ sequenceDiagram
 
     loop For each portfolio
         Script->>Script: _calculate_nav_timeseries(holdings, price_map)
-        Script->>MongoPortfolios: update_one({accountNumber}, {$set: {nav_timeseries}})
-    end
+    Script->>MongoPortfolios: update_one({accountNumber}, {$set: {nav_timeseries}})
+    MongoPortfolios-->>Script: OK
 ```
+
+### Instrument Lifecycle Diagram
+
+```mermaid
+flowchart TB
+    subgraph Discovery ["1. Discovery"]
+        Feeds[feeds.tags collection] -->|comma-separated symbols| Tags[monitor_feeds_tags.py]
+        Portfolios[portfolios collection] -->|holdings symbols| Monitor[monitor_instruments.py]
+    end
+
+    subgraph Creation ["2. Creation"]
+        Tags -->|symbol, securityCode, marketCode_yf| Instruments[(instruments collection)]
+        Monitor -->|symbol + metadata from Market| Instruments
+    end
+
+    subgraph Market ["3. Market Data Provider"]
+        Market[m.yfinance_provider.YFinanceProvider] <-->|fetch_instrument_metadata| Monitor
+        Market <-->|fetch_instrument_timeseries| Timeseries[get_instruments_timeseries.py]
+        Market <-->|fetch_current_prices| Price[price_streamer.py]
+    end
+
+    subgraph Enrichment ["4. Enrichment"]
+        Timeseries -->|timeseries + performance_1m/3m/1y| Instruments
+        Price -->|currentPrice + performance_1m/3m/1y| Instruments
+    end
+
+    subgraph Scheduling ["5. Scheduling"]
+        CronJob1[daily-consolidation Cron Job] -->|daily 09:00 UTC| Batch[batch/daily_consolidation.py]
+        CronJob2[data-collection Cron Job] -->|hourly :00 UTC| Batch
+        Worker[daemon-worker Background Worker] -->|continuous| Monitor
+        Worker -->|continuous| Price
+    end
+
+    style Feeds fill:#e1f5e1,stroke:#333
+    style Portfolios fill:#e1f5e1,stroke:#333
+    style Instruments fill:#fff4e1,stroke:#333,stroke-width:2px
+    style Market fill:#e1e1ff,stroke:#333
+    style CronJob1 fill:#e1e1ff,stroke:#333
+    style CronJob2 fill:#e1e1ff,stroke:#333
+    style Worker fill:#e1e1ff,stroke:#333
+```
+
+### Instrument Field Ownership
+
+| Field | Populated By | Source |
+|-------|-------------|--------|
+| `symbol` | `monitor_feeds_tags.py` | feeds.tags |
+| `securityCode` | `monitor_feeds_tags.py` | feeds.tags tag parsing |
+| `marketCode_yf` | `monitor_feeds_tags.py` | feeds.tags tag parsing |
+| `securityDescription` | `monitor_feeds_tags.py` | feeds.tags (empty default) |
+| `currency` | `monitor_feeds_tags.py` | feeds.tags (empty default) |
+| `sector` | `monitor_instruments.py` / `get_instruments.py` | Market Data Provider |
+| `industry` | `monitor_instruments.py` / `get_instruments.py` | Market Data Provider |
+| `dividend_yield` | `monitor_instruments.py` / `get_instruments.py` | Market Data Provider |
+| `currentPrice` | `monitor_instruments.py` / `price_streamer.py` | Market Data Provider |
+| `timeseries` | `get_instruments_timeseries.py` | Market Data Provider |
+| `performance_1m` | `price_streamer.py` / `get_instruments_timeseries.py` | Calculated from timeseries |
+| `performance_3m` | `price_streamer.py` / `get_instruments_timeseries.py` | Calculated from timeseries |
+| `performance_1y` | `price_streamer.py` / `get_instruments_timeseries.py` | Calculated from timeseries |
 
 ### Fees Reporting Pipeline
 
