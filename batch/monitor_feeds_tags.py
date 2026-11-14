@@ -70,16 +70,27 @@ def parse_symbol(symbol: str) -> Dict[str, str]:
 
 
 def extract_symbols_from_tags(documents: List[Dict[str, Any]]) -> List[str]:
-    """Extract comma-separated instrument tags from feeds.tags documents."""
+    """Extract instrument tags from feeds.tags documents.
+
+    Looks only at the ``tags`` field of each document. Handles both
+    comma-separated string values (e.g. "CBA.AX, BHP.AX")
+    and array values (e.g. ["^XJO", "^AXJT", "USOIL"]).
+    """
     symbols: List[str] = []
     for doc in documents:
-        for key, value in doc.items():
-            if not isinstance(value, str):
-                continue
-            for tag in value.split(","):
-                tag = tag.strip()
-                if tag and tag not in symbols:
-                    symbols.append(tag)
+        tags_value = doc.get("tags")
+        if tags_value is None:
+            continue
+        if isinstance(tags_value, str):
+            tags = tags_value.split(",")
+        elif isinstance(tags_value, list):
+            tags = [str(v) for v in tags_value]
+        else:
+            continue
+        for tag in tags:
+            tag = tag.strip()
+            if tag and tag not in symbols:
+                symbols.append(tag)
     return symbols
 
 
