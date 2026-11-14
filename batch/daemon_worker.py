@@ -76,6 +76,10 @@ class _DowngradeDelistedFilter(logging.Filter):
 # WARNING instead of ERROR in the terminal output.
 logging.getLogger("yfinance").addFilter(_DowngradeDelistedFilter())
 
+# Also add to root logger as catch-all for any yfinance sub-loggers that
+# may not propagate to the parent "yfinance" logger.
+logging.getLogger().addFilter(_DowngradeDelistedFilter())
+
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 WEEKEND_DAYS = {5, 6}  # Saturday=5, Sunday=6
 MONDAY_START_HOUR = 8  # Start daemons at 08:00 Sydney time on Monday
