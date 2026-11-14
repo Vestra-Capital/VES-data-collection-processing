@@ -780,7 +780,7 @@ def run_once(db_name: str) -> None:
         try:
             nav_timeseries = _calculate_nav_timeseries(holdings, price_map)
             if not nav_timeseries:
-                logger.info("No NAV data generated for accountNumber=%s; skipping risk.", account_number)
+                logger.debug("No NAV data generated for accountNumber=%s; skipping risk.", account_number)
                 continue
 
             if is_new:
