@@ -6,9 +6,10 @@ price data (date + close price) for each symbol via the configured market data
 provider, and upserts the resulting ``timeseries`` array onto each instrument
 document.
 
-The ``timeseries`` field contains a list of ``{"date": str, "price": float}``
-dicts sorted ascending by date.  Only documents that successfully return
-history are updated; failures are logged but do not abort the run.
+Additionally calculates performance percentages based on the timeseries:
+    - performance_1m: price change over the last ~30 days
+    - performance_3m: price change over the last ~90 days
+    - performance_1y: price change over the last ~365 days
 
 Columns produced / stored:
     - symbol (existing)
@@ -21,6 +22,9 @@ Columns produced / stored:
     - dividend_yield (existing)
     - currentPrice (existing)
     - timeseries (added/updated): list of {"date": str, "price": float}
+    - performance_1m (added/updated): percentage change over ~30 days
+    - performance_3m (added/updated): percentage change over ~90 days
+    - performance_1y (added/updated): percentage change over ~365 days
 
 Environment variables:
     MONGODB_SRV — MongoDB connection string.
@@ -32,6 +36,7 @@ Environment variables:
 import logging
 import os
 import sys
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List
 
 from dotenv import load_dotenv
@@ -78,6 +83,53 @@ def _get_market_data_provider() -> Any:
     return provider_class()
 
 
+def _calculate_performance(timeseries: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Calculate 1M, 3M, 1Y performance percentages from timeseries data.
+
+    For each period, finds the closest price on or before
+    (latest_date - N days) and computes:
+        (latest_price - past_price) / past_price * 100
+    """
+    if not timeseries:
+        return {}
+
+    sorted_ts = sorted(timeseries, key=lambda x: x.get("date", ""))
+
+    latest_entry = sorted_ts[-1]
+    latest_price = latest_entry.get("price")
+    latest_date = latest_entry.get("date")
+
+    if not latest_price:
+        return {}
+
+    try:
+        latest_dt = datetime.strptime(latest_date, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return {}
+
+    result: Dict[str, float] = {}
+
+    for label, days in [("1m", 30), ("3m", 90), ("1y", 365)]:
+        target_date = latest_dt - timedelta(days=days)
+
+        closest_price = None
+        for entry in sorted_ts:
+            try:
+                entry_date = datetime.strptime(entry.get("date", ""), "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+            if entry_date <= target_date:
+                closest_price = entry.get("price")
+            else:
+                break
+
+        if closest_price and closest_price > 0:
+            performance = (latest_price - closest_price) / closest_price * 100
+            result[f"performance_{label}"] = round(performance, 2)
+
+    return result
+
+
 def _upsert_instrument_timeseries(db_name: str, documents: List[Dict[str, Any]]) -> None:
     if not documents:
         print("No instrument documents to upsert.")
@@ -96,7 +148,7 @@ def _upsert_instrument_timeseries(db_name: str, documents: List[Dict[str, Any]])
             collection.replace_one({"symbol": symbol}, doc, upsert=True)
             upserted += 1
 
-        print(f"Upserted {upserted} instrument(s) with timeseries into '{db_name}.instruments'.")
+        print(f"Upserted {upserted} instrument(s) with timeseries and performance into '{db_name}.instruments'.")
     except PyMongoError as e:
         raise RuntimeError(f"Failed to upsert instrument timeseries into MongoDB: {e}") from e
     finally:
@@ -134,11 +186,13 @@ def main() -> None:
         if timeseries:
             updated = dict(instrument)
             updated["timeseries"] = timeseries
+            performance = _calculate_performance(timeseries)
+            updated.update(performance)
             enriched.append(updated)
         else:
             logger.info("No timeseries data returned for symbol=%s; skipping.", symbol)
 
-    print(f"Enriched {len(enriched)} instrument(s) with timeseries. Failed: {len(failed)}.")
+    print(f"Enriched {len(enriched)} instrument(s) with timeseries and performance. Failed: {len(failed)}.")
 
     if enriched:
         _upsert_instrument_timeseries(db_name, enriched)
