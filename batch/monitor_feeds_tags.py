@@ -10,7 +10,9 @@ the result into the ``instruments`` collection.
 Environment variables:
     MONGODB_SRV — MongoDB connection string.
     DATABASE_NAME — Database name (defaults to ``VESTRA_PROD``).
-    FEEDS_COLLECTION — Collection name to read tags from (defaults to ``feeds.tags``).
+    FEEDS_COLLECTION — Collection name to read tags from (defaults to ``feeds.tags``.
+        Use ``database.collection`` notation if tags live in a different database,
+        e.g. ``feeds.tags`` reads from database ``feeds``, collection ``tags``).
 """
 
 import logging
@@ -45,7 +47,19 @@ def fetch_tags_documents(db_name: str) -> List[Dict[str, Any]]:
         db = client[db_name]
         collection_name = os.getenv("FEEDS_COLLECTION", "feeds.tags")
         collection = db[collection_name]
-        return list(collection.find({}, {"_id": 0}))
+        documents = list(collection.find({}, {"_id": 0}))
+        # Debug: list all collections if empty
+        if not documents:
+            all_colls = db.list_collection_names()
+            logger.info(
+                "Collections in '%s': %s", db_name, all_colls[:20]
+            )
+            logger.info(
+                "Collection '%s' has %d document(s).",
+                collection_name,
+                collection.count_documents({}),
+            )
+        return documents
     except PyMongoError as e:
         raise RuntimeError(f"Failed to fetch tags from MongoDB: {e}") from e
     finally:
