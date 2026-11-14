@@ -1,10 +1,11 @@
 """Combined Background Worker for the VES data-collection daemons.
 
-Runs all three long-lived polling loops concurrently in a single Render
+Runs all four long-lived polling loops concurrently in a single Render
 Background Worker service to save on Render costs (one service instead of
-three):
+four):
 
-  - batch/monitor_instruments.py      -> detect and enrich new instruments
+  - batch/monitor_instruments.py      -> detect and enrich new instruments from portfolios
+  - batch/monitor_feeds_tags.py       -> detect and add instruments from feeds.tags
   - batch/update_portfolios_and_risk_metrics.py -> maintain NAV timeseries and risk metrics
   - batch/price_streamer.py           -> poll current instrument prices
 
@@ -24,6 +25,7 @@ Environment variables (set in the Render dashboard Environment tab):
     MARKET_DATA_PROVIDER      - Market data provider module path
     PRICE_POLL_INTERVAL_SECONDS - Seconds between price polls (default: 15)
     UPDATE_PORTFOLIOS_POLL_INTERVAL_SECONDS - Seconds between portfolio/risk cycles (default: 300)
+    FEEDS_TAGS_POLL_INTERVAL_SECONDS - Seconds between feeds.tags polling cycles (default: 300)
     SKIP_WEEKENDS             - Set to "false" to run price_streamer on
                                 Saturday/Sunday too (default: "true")
 """
@@ -44,6 +46,7 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
+from batch.monitor_feeds_tags import main as monitor_feeds_tags_main
 from batch.monitor_instruments import main as monitor_instruments_main
 from batch.price_streamer import main as price_streamer_main
 from batch.update_portfolios_and_risk_metrics import main as update_portfolios_main
@@ -141,9 +144,9 @@ def wait_for_monday_start() -> None:
 def run_price_streamer_with_weekend_guard() -> None:
     """Run price_streamer only on weekdays (after Monday 08:00 Sydney).
 
-    The other two daemons (monitor-instruments, update-portfolios-risk) run
-    continuously regardless of weekends. Only price_streamer (Yahoo Finance
-    price polling) is paused over the weekend.
+    The other three daemons (monitor-instruments, update-portfolios-risk,
+    feeds-tags) run continuously regardless of weekends. Only price_streamer
+    (Yahoo Finance price polling) is paused over the weekend.
     """
     skip_weekends = os.getenv("SKIP_WEEKENDS", "true").lower() == "true"
 
@@ -153,8 +156,27 @@ def run_price_streamer_with_weekend_guard() -> None:
     price_streamer_main()
 
 
+def run_feeds_tags_continuously() -> None:
+    """Run monitor_feeds_tags in a continuous loop with a poll interval.
+
+    Reads comma-separated instrument tags from feeds.tags collection,
+    parses them into securityCode/marketCode_yf, and upserts into
+    instruments collection. Polls every
+    FEEDS_TAGS_POLL_INTERVAL_SECONDS (default: 300 seconds).
+    """
+    poll_interval = int(os.getenv("FEEDS_TAGS_POLL_INTERVAL_SECONDS", "300"))
+
+    while True:
+        try:
+            monitor_feeds_tags_main()
+        except Exception:
+            logger.exception("feeds-tags daemon exited unexpectedly; retrying.")
+        time.sleep(poll_interval)
+
+
 DAEMONS = [
     ("monitor-instruments", monitor_instruments_main),
+    ("feeds-tags", run_feeds_tags_continuously),
     ("update-portfolios-risk", update_portfolios_main),
     ("update-prices", run_price_streamer_with_weekend_guard),
 ]
