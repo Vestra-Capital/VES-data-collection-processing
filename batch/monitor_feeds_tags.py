@@ -1,11 +1,15 @@
 """Batch script to monitor feeds.tags collection for instrument symbols,
 parse them into securityCode/marketCode_yf, and upsert into instruments.
 
-Reads all documents from the ``feeds.tags`` collection, extracts comma-separated
+Reads all documents from the feeds tags collection, extracts comma-separated
 instrument tags (e.g. ``"CBA.AX, BHP.AX, ^XJO"``), splits each tag into
 ``securityCode`` (everything before the dot) and ``marketCode_yf`` (everything
 after the dot, empty string if there is no dot such as ``^XJO``), and upserts
 the result into the ``instruments`` collection.
+
+Existing instrument documents are merged with new fields rather than replaced,
+so metadata (sector, industry, dividend_yield, currentPrice, timeseries,
+performance_*) enriched by other daemons is preserved.
 
 Environment variables:
     MONGODB_SRV — MongoDB connection string.
@@ -129,7 +133,17 @@ def upsert_instruments(db_name: str, instruments: List[Dict[str, Any]]) -> None:
             symbol = instrument.get("symbol")
             if not symbol:
                 continue
-            collection.replace_one({"symbol": symbol}, instrument, upsert=True)
+
+            # Fetch existing doc to preserve metadata fields (sector, industry,
+            # dividend_yield, currentPrice, timeseries, performance_*) that may
+            # have been enriched by other daemons. Only overwrite fields present
+            # in the new instrument document; leave everything else intact.
+            existing = collection.find_one({"symbol": symbol}, {"_id": 0})
+            if existing:
+                merged = {**existing, **instrument}
+                collection.replace_one({"symbol": symbol}, merged, upsert=True)
+            else:
+                collection.replace_one({"symbol": symbol}, instrument, upsert=True)
             upserted += 1
 
         logger.info(
