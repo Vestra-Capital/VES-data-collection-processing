@@ -130,6 +130,22 @@ def _chunk_list(items: list, size: int) -> list:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
+def _sleep_with_progress(seconds: int) -> None:
+    """Sleep for *seconds* while printing a countdown progress bar."""
+    width = 30
+    for remaining in range(seconds, 0, -1):
+        filled = int(width * (seconds - remaining) / seconds)
+        bar = "█" * filled + "─" * (width - filled)
+        pct = int(100 * (seconds - remaining) / seconds)
+        print(
+            f"\r⏳ Next poll in {remaining:3d}s |{bar}| {pct:3d}% ",
+            end="",
+            flush=True,
+        )
+        time.sleep(1)
+    print("\r" + " " * (width + 40) + "\r", end="", flush=True)
+
+
 def main() -> None:
     db_name = os.getenv("DATABASE_NAME", "VESTRA_PROD")
     poll_interval = get_poll_interval()
@@ -215,7 +231,7 @@ def main() -> None:
             logger.error("Poll error: %s", e, exc_info=True)
 
         try:
-            time.sleep(poll_interval)
+            _sleep_with_progress(poll_interval)
         except KeyboardInterrupt:
             logger.info("Interrupted; shutting down.")
             break
